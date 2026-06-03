@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Daten & Outputs (nach Bedarf anpassen)
+*.xlsx
+data/
+outputs/
+
+# conda env-Ordner niemals committen (nur environment.yml!)
+envs/
+.conda/
+
+# macOS
+.DS_Store
+
+# VS Code (lokale Settings)
+.vscode/
