@@ -1,0 +1,78 @@
+# ============================================================================
+#  pyproject.toml  --  Visitenkarte deines Pakets gegenueber Python.
+#
+#  Zweck: macht `pip install -e .` moeglich. Danach funktioniert
+#  `import aguirre` von ueberall -- Notebook, Skript, Slurm-Job auf dem
+#  Cluster -- unabhaengig vom Arbeitsverzeichnis.
+#
+#  Standard: PEP 621 (https://peps.python.org/pep-0621/)
+#
+#  TODO markiert, was du selbst ausfuellen sollst.
+# ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# [build-system]  --  WOMIT wird das Paket gebaut.
+#   Reines Boilerplate, musst du nie anfassen. setuptools ist der
+#   Standard-Builder; "wheel" ist das Paketformat.
+# ---------------------------------------------------------------------------
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+# ---------------------------------------------------------------------------
+# [project]  --  WAS ist dieses Paket.
+# ---------------------------------------------------------------------------
+[project]
+
+# Der Importname. MUSS mit dem Ordnernamen unter src/ uebereinstimmen,
+# sonst findet Python das Paket nicht. src/aguirre/ -> "aguirre".
+name = "aguirre"
+
+# Freie Wahl. Konvention ist semantische Versionierung (MAJOR.MINOR.PATCH).
+# Fuer dich reicht 0.1.0 waehrend der Entwicklung.
+version = "0.1.0"
+
+# TODO: ein Satz, was das Paket macht.
+description = "AMP-Diffusion Model, using ESM-2 Embeddingspace for denoising and generation. Furthermore, these Modul provides filter systems like APEX and ProGen2 for choosing AMP candidates. "
+
+# TODO: dein Name + Mail. Format: [{ name = "...", email = "..." }]
+authors = [{ name = "Paul Medebach", email = "paulmedebach@proton.me"}]
+
+# Mindest-Python-Version. Die Conda-Umgebung fue-amp laeuft auf 3.11;
+# ">=3.10" bleibt absichtlich weiter gefasst, damit das Paket auch in
+# einer aelteren Umgebung auf dem Cluster importierbar bleibt.
+requires-python = ">=3.10"
+
+# Laufzeit-Abhaengigkeiten: was `import` in src/aguirre/ braucht.
+#
+#   torch steht hier bewusst NICHT drin. Es kommt ueber die
+#   environment.yml bzw. auf dem Cluster in der dortigen CUDA-Variante;
+#   eine Versionsangabe hier wuerde pip dazu verleiten, eine andere
+#   Variante drueberzuinstallieren.
+#
+#   Warum doppelt zu environment.yml? Die environment.yml baut die
+#   Conda-Umgebung (inkl. CUDA und nicht-Python-Zeug). Diese Liste
+#   dokumentiert, was DAS PAKET selbst braucht.
+dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2.2",
+    "matplotlib>=3.10",
+    "fair-esm>=2.0.0",
+    "einops>=0.8",
+    "ema-pytorch>=0.8",
+    "tqdm>=4.67,<5",
+    "pyyaml",
+]
+
+
+
+# ---------------------------------------------------------------------------
+# [tool.setuptools]  --  WO liegt der Quellcode.
+#   "src layout": Code unter src/, nicht im Wurzelverzeichnis. Vorteil: beim
+#   Testen importierst du zwangslaeufig die installierte Version, nie
+#   versehentlich den Ordner daneben. Verhindert eine fiese Fehlerklasse.
+# ---------------------------------------------------------------------------
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,53 @@
+% ===========================================================
+%  Masterarbeit -- Ausarbeitung
+%  Kompilieren:  latexmk -pdf main.tex     (nutzt .latexmkrc)
+%  Sprache umstellen: in praeambel.tex die babel-Zeile tauschen
+% ===========================================================
+\documentclass[
+    12pt,
+    a4paper,
+    twoside,            % doppelseitig; fuer einseitig: oneside
+    openright,
+    listof=totoc,
+    numbers=noenddot,
+]{scrbook}
+
+\input{praeambel}
+
+\begin{document}
+
+% ---------- Vorspann (roemische Seitenzahlen) ----------
+\frontmatter
+
+\input{vorspann/titelseite}
+
+\input{vorspann/zusammenfassung}
+
+\tableofcontents
+\listoffigures
+\listoftables
+\input{vorspann/abkuerzungen}
+
+% ---------- Hauptteil (arabische Seitenzahlen, nummerierte Kapitel) ----------
+\mainmatter
+
+\input{kapitel/01_einleitung}
+\input{kapitel/02_theoretischer_hintergrund}
+\input{kapitel/03_material_und_methoden}
+\input{kapitel/04_ergebnisse}
+\input{kapitel/05_diskussion}
+\input{kapitel/06_fazit_und_ausblick}
+
+% ---------- Literatur ----------
+\cleardoublepage
+\printbibliography[heading=bibintoc]
+
+% ---------- Anhang ----------
+\appendix
+\input{anhang/anhang_a_ergaenzende_daten}
+
+% ---------- Erklaerung ----------
+\backmatter
+\input{vorspann/eidesstattliche_erklaerung}
+
+\end{document}

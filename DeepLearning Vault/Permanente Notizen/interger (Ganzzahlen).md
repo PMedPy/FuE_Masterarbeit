@@ -1,0 +1,1 @@
+Sind ganze Zahlen

@@ -1,0 +1,78 @@
+% ===========================================================
+%  Praeambel -- Pakete und Einstellungen
+% ===========================================================
+
+% ---------- Sprache & Kodierung ----------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[ngerman]{babel}      % Englisch: [english]{babel}
+\usepackage{csquotes}           % von biblatex benoetigt
+
+% ---------- Schrift & Mikrotypografie ----------
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% ---------- Mathematik ----------
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{bm}
+
+% ---------- Einheiten & Chemie ----------
+\usepackage{siunitx}
+\sisetup{
+    locale = DE,                % Englisch: locale = US
+    per-mode = symbol,
+    range-units = single,
+}
+\usepackage[version=4]{mhchem}
+
+% ---------- Abbildungen & Tabellen ----------
+\usepackage{graphicx}
+\graphicspath{{abbildungen/}}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[labelfont=bf,font=small]{caption}
+\usepackage{subcaption}
+
+% ---------- Code-Listings (fuer Methodenteil) ----------
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny,
+    captionpos=b,
+    showstringspaces=false,
+    language=Python,
+}
+
+% ---------- Literatur (Zotero + Better BibTeX) ----------
+\usepackage[
+    backend=biber,
+    style=numeric-comp,         % Alternative: authoryear
+    sorting=none,               % Nummerierung nach Erstzitat
+    maxbibnames=99,
+    giveninits=true,
+    doi=true,
+    url=false,
+    isbn=false,
+]{biblatex}
+\addbibresource{literatur/literatur.bib}
+
+% ---------- Querverweise (immer zuletzt laden) ----------
+\usepackage[
+    hidelinks,
+    breaklinks=true,
+    pdfusetitle,
+]{hyperref}
+\usepackage[noabbrev,nameinlink]{cleveref}
+
+% ---------- Eigene Makros ----------
+\newcommand{\amp}{AMP}
+\newcommand{\esm}{ESM-2}
+
+% ---------- Platzhalter sichtbar machen ----------
+\usepackage{xcolor}
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO:} #1\textbf{]}}}

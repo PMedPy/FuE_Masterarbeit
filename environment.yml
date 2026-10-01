@@ -1,0 +1,72 @@
+# ============================================================
+# FuE_Masterarbeit -- Latente Diffusion fuer AMPs
+# ============================================================
+# Erstellen:     conda env create -f environment.yml
+# Aktualisieren: conda env update -f environment.yml --prune
+# Aktivieren:    conda activate fue-amp
+#
+# PyTorch kommt bewusst ueber pip: der offizielle PyTorch-
+# Anaconda-Kanal wurde eingestellt (pytorch/pytorch#138506).
+# ESM-2 kommt ueber fair-esm -- das ist die API, auf die sich der
+# Referenzcode von Torres stuetzt. transformers bleibt installiert,
+# aber nur fuer ProGen2 in der Evaluation (Abschnitt 9).
+# ============================================================
+name: fue-amp
+
+channels:
+  - conda-forge
+  # Kein "defaults" und kein "pytorch" -- Mischen bricht das Solving.
+
+dependencies:
+  # ---------- Interpreter ----------
+  - python=3.11
+
+  # ---------- Wissenschaftlicher Kern ----------
+  - numpy>=1.26,<3
+  - scipy
+  - pandas
+  - matplotlib
+  - seaborn
+
+  # ---------- Notebooks / Entwicklung ----------
+  - jupyterlab
+  - ipykernel
+  - ipywidgets
+  - tqdm
+
+  # ---------- Code-Qualitaet ----------
+  - ruff
+  - black
+  - pytest
+
+  # ---------- Bioinformatik ----------
+  - biopython
+
+  # ---------- pip-only ----------
+  - pip
+  - pip:
+      # PyTorch -- das Wheel wird nach Plattform gewaehlt, auf der
+      # installiert wird: macOS -> MPS (Apple Metal),
+      # Linux/x86 -> CUDA-Laufzeit gebuendelt. Die Umgebung ist daher
+      # nicht uebertragbar: auf dem Cluster neu bauen.
+      - torch>=2.6
+      - torchvision
+
+      # Protein-Sprachmodell: ESM-2 (esm2_t6_8M_UR50D)
+      - fair-esm>=2.0.0
+
+      # HF-Stack -- gebraucht fuer ProGen2-Perplexitaet in der Evaluation
+      - transformers>=4.45
+      - tokenizers
+      - safetensors
+      - huggingface_hub
+      - accelerate
+
+      # Diffusions-Bausteine
+      - einops
+      - ema-pytorch>=0.4.2
+
+      # Experiment-Tracking
+      - wandb
+
+
