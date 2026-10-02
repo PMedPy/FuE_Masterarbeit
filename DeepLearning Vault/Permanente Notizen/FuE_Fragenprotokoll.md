@@ -2,7 +2,7 @@
 Tags: #FuE #MachineLearning 
 Status: #unextended
 
-# Topic
+# Code
 
 ### Helperfunctions?
 Für was sind die Helperfunction gut? Würde die jetzt nicht brauchen
@@ -117,5 +117,57 @@ pred_noise = self.predict_noise_from_start(x, t, x_start)
 
 return ModelPrediction(pred_noise, x_start)
 ```
-- Allgemeine Frage: wo bleibt das torch.to(device)? Also der agnostik code?
-- 
+- Allgemeine Frage: wo bleibt das torch.to(device)? Also der system agnostik code?
+- Bei Modellprediction: Für was hier die Padding-Mask? ist das schon die Einstellung für die Länge des AMPs, die generiert werden soll?
+- with torch.no_grad(): Eigentlich mittlerweile "with torch.inferencemode()"
+- Sollte hier nicht eigentlich x als return stehen und kein Loss?
+```Python
+def forward(self, img, padding_mask, *args, **kwargs):
+
+b, device = len(img), self.device
+
+t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
+
+img = self.normalize(img)
+
+return self.p_losses(img, t, padding_mask = padding_mask, *args, **kwargs)
+```
+#### class Denoise_Transformer(nn.Module)
+- Hier Embedding dimension: 1280? doch großes modell?
+- Warum hier SinussoidalPosEMb?:
+```Python
+self.time_mlp = nn.Sequential(
+
+SinusoidalPosEmb(embed_dim),
+
+nn.Linear(embed_dim, time_dim),
+
+nn.GELU(),
+
+nn.Linear(time_dim, embed_dim * pep_max_len * 2),
+
+)
+```
+ESM-2 hat doch schon RoPE?
+- Was bedeutet Time-Embedding bei dem forwardpass?
+- Wird hier mehrmals die Attentionlayer des ESM-2 verwendet?: 
+```Python
+for layer_idx, layer in enumerate(self.esm_layers):
+	x, attn = layer(
+	x,
+	self_attn_padding_mask=padding_mask,
+	)
+```
+
+# Aus dem Paper selbst
+
+Grundkonzept:
+Training: ESM-2 Embeddings aus Datensatz AMPs encoden.
+Encodeter Datensatz schrittweise mit Rauschen beaufschlagen (Diffusionsmodell lernt wie aus Rauschen AMPs ESM-2 Embeddings generiert werden)
+INferenz: Input entweder AMP größe mit padding oder random. Aufbau eines verrrauschten Embeddings -> Denoising mit dem Diffusionsmodell, decode mit Multiattentionhead!
+Frage: Könnte man nicht einen VAE mit Transformer für das Diffmodell bauen? Also:
+ESM-2 - Encode- Latent Space (Diffusionsmodell generiert latentes embedding)- decode zu ESM-2 Embedding - Decode zu AS-Sequenz. 
+
+- AMP Diffusionsmodell nach DDPM framework: 
+- EMA für Retraining? Was ist damit gemeint?
+- Könnte man für ein guided Diffusion modell nicht für alle Trainingsdaten APEX anschmeißen, der generiert MICS gegen bestimmte Pathogene und diese Werte können zum Training verwendet werden?

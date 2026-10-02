@@ -20,9 +20,38 @@ Modell: esm2_t6_8M_UR50D  ->  D = 320, 6 Layer
 """
 
 import torch.nn as nn
-
+import torch 
+import esm
 
 class ESMWrapper(nn.Module):
-    """Eingefrorener ESM-2: Sequenz <-> Embedding."""
+    """Wrapper um Denoiser: Aufbau eines Embeddingraumes und decoding in Aminosäurelänge
+    """
+    def __init__(self, device: str = "cpu", *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        model, alphabet = esm.pretrained.esm2_t6_8M_UR50D()
+        AS_list = alphabet.all_toks[4:-7]
+        batch_converter = alphabet.get_batch_converter()
 
-    # TODO
+        self.model = model
+        self.alphabet = alphabet
+        self.batch_converter = batch_converter
+        self.device = device
+        
+
+    @torch.no_grad()
+    def ESM_encode(self, seqs: list[str]) -> torch.Tensor: 
+        """"""
+        data = [(f"seq{i}", s) for i, s in enumerate(seqs)]
+        model = self.model
+        model.eval().to(self.device)
+        _, _,seq_tokens = self.batch_converter(data) # dims (B,L_batch)
+        out = model(seq_tokens.to(self.device), repr_layers = [model.num_layers]) #dims (B)
+        reps = out["representations"][model.num_layers]
+        reps_sliced = reps[:,1:-1,:] #Abschneiden von BOS und EOS
+        return reps_sliced.cpu()
+
+
+    @torch.no_grad()
+    def ESM_decode():
+        pass
+

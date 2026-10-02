@@ -25,6 +25,7 @@ Konfigobjekt
 FASTA, CSV, nur AMPs, Längenfilter
 
 ##  2 ESM-Wrapper
+[[Pseudocode ESM Wrapper]]
 
 ## 3 PeptideDataset und DataLoader
 - Batch + Paddingmaske
