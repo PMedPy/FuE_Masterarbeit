@@ -18,10 +18,18 @@ Methoden, die du brauchen wirst:
 """
 
 from dataclasses import dataclass
+import torch
 
 
 @dataclass
 class Config:
     """Alle Hyperparameter eines Laufs an einer Stelle."""
+    esm_model_name: str = "esm2_t6_8M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
+    embed_dim: int = 320
+    pep_max_len: int = 42
+    device: str = (
+        "cuda" if torch.cuda.is_available() 
+        else "mps" if torch.backends.mps.is_available() 
+        else "cpu"
+        )
 
-    # TODO
