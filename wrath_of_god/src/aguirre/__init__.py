@@ -1,4 +1,4 @@
-"""Torrinator -- Latent-Diffusion-Modell zur De-novo-Generierung von AMPs.
+"""aguirre, the wrath of god -- Latent-Diffusion-Modell zur De-novo-Generierung von AMPs.
 
 Nachbau und Erweiterung von Torres et al. (2025), AMPDiffusion.
 

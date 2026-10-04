@@ -25,8 +25,10 @@ import esm
 
 class ESMWrapper(nn.Module):
     """Wrapper um Denoiser: Aufbau eines Embeddingraumes und decoding in Aminosäurelänge
+    ### Args:
+        - device (string, wird im Geräte unabhängigen Code definiert.), "cpu" als default.
     """
-    def __init__(self, device: str = "cpu", *args, **kwargs):
+    def __init__(self, device: str = "cpu", L_max: int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         model, alphabet = esm.pretrained.esm2_t6_8M_UR50D()
         AS_list = alphabet.all_toks[4:-7]
@@ -36,11 +38,19 @@ class ESMWrapper(nn.Module):
         self.alphabet = alphabet
         self.batch_converter = batch_converter
         self.device = device
+        self.L_max = L_max
         
 
-    @torch.no_grad()
+    @torch.no_grad() #Protokoll für Backprop
     def ESM_encode(self, seqs: list[str]) -> torch.Tensor: 
-        """"""
+        """
+        ### Encoder.
+            Baut aus einem Batch von Peptidsequenzen ein ESM-2 Embedding. BOS und EOS werden abgeschnitten, 
+            sodass Ausgabe mit Shape (B,L_batch, D) ausgegeben wird. 
+
+        ### Args:
+        - seqs als Inputliste mit Sequenzen, z.B ["ACDEFGHIKLMN", "KLVFFAED"]
+        """
         data = [(f"seq{i}", s) for i, s in enumerate(seqs)]
         model = self.model
         model.eval().to(self.device)
