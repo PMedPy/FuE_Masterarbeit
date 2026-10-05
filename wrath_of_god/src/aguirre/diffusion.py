@@ -38,3 +38,6 @@ class DiffusionProcess(nn.Module):
     """Forward-Rauschen, Loss und Reverse-Sampling. Wrappt den Denoiser."""
 
     # TODO
+
+
+print("Test: neuer Branch")
