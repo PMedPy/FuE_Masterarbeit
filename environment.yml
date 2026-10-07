@@ -15,6 +15,7 @@ name: fue-amp
 
 channels:
   - conda-forge
+  - bioconda
   # Kein "defaults" und kein "pytorch" -- Mischen bricht das Solving.
 
 dependencies:
@@ -27,6 +28,13 @@ dependencies:
   - pandas
   - matplotlib
   - seaborn
+    # ---------- PyTorch ----------
+  # Ueber conda-forge, NICHT ueber pip: das pip-Wheel bringt ein eigenes
+  # libomp mit, das mit dem llvm-openmp von numpy/scipy kollidiert
+  # (OMP Error #15, Abbruch beim import torch).
+  # Der eingestellte Kanal war "pytorch" -- conda-forge liefert
+  # PyTorch weiterhin, inkl. MPS auf Apple Silicon.
+  - pytorch>=2.6
 
   # ---------- Notebooks / Entwicklung ----------
   - jupyterlab
@@ -41,6 +49,7 @@ dependencies:
 
   # ---------- Bioinformatik ----------
   - biopython
+  - mmseqs2
 
   # ---------- pip-only ----------
   - pip
@@ -49,8 +58,7 @@ dependencies:
       # installiert wird: macOS -> MPS (Apple Metal),
       # Linux/x86 -> CUDA-Laufzeit gebuendelt. Die Umgebung ist daher
       # nicht uebertragbar: auf dem Cluster neu bauen.
-      - torch>=2.6
-      - torchvision
+
 
       # Protein-Sprachmodell: ESM-2 (esm2_t6_8M_UR50D)
       - fair-esm>=2.0.0
