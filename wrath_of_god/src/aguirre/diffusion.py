@@ -27,10 +27,10 @@ Diese Datei enthaelt lediglich den Foward-Pfad. Sampling und der Reverse-Pfad
 ist in "sampler.py" und "denoiser.py"
 
 Rausgelassen wurden:
-'log_one_minus_alphas_cumprod'                                     -> Altlast aus anderem Paper (wird nicht verwendet)
-'self_condition' und 'x_self_cond'                                 -> Werden in generate.py auf 'False' gesetzt 
-'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timsteps = 1000 nutzt
-'p2_loss_weight'                                                   -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
+'log_one_minus_alphas_cumprod'                                      -> Altlast aus anderem Paper (wird nicht verwendet)
+'self_condition' und 'x_self_cond'                                  -> Werden in generate.py auf 'False' gesetzt 
+'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timsteps = 1000 nutzt
+'p2_loss_weight'                                                    -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
 
 """
 
@@ -157,7 +157,7 @@ class NoiseSchedule(nn.Module):
             jedes Batch-Element bekommt seinen eigenen Skalar.
          """
         
-        b = t.shape                                                
+        b = t.shape[0]                                                
         out = a.gather(-1, t.to(a.device))                         #(B,); "t.to(a.device)" zieht spaeter einfacher alles auf GPU bzw dahin wo a liegt, damit es verrechnet werden kann -> Reine Sicherheit
         return out.reshape(b, *((1,) * (len(x_shape) - 1)))        #(B, 1, 1)
 
@@ -209,7 +209,7 @@ class DiffusionProcess(nn.Module):
         self.loss_type = loss_type
 
         self.schedule = NoiseSchedule(timesteps=timesteps, beta_schedule=beta_schedule)
-        self.num_timesteps = self.schedule.timesteps
+        self.num_timesteps = self.schedule.num_timesteps
 
         # die Konstanten passen zu ESM2-8M (D = 320)
         # Sobaldder ESMWrapper auf ESM2-650M (D = 1280) umschaltet,
@@ -274,7 +274,7 @@ class DiffusionProcess(nn.Module):
          """
         
         if noise is None:
-            noise = torch.rand_like(x_start)            #(B, L, D) Ersetzt Lambda und exist Term aus ampdiffusion (Z. 45 - 52)
+            noise = torch.randn_like(x_start)            #(B, L, D) Ersetzt Lambda und exist Term aus ampdiffusion (Z. 45 - 52)
 
         extract = self.schedule.extract
         sqrt_ab = extract(self.schedule.sqrt_alphas_cumprod, t, x_start.shape)                 #Reine shape Zusatzzeile -> (B, 1, 1)
@@ -308,8 +308,8 @@ class DiffusionProcess(nn.Module):
     def predict_v(
             self,
             x_start: torch.Tensor,
-            t: torch.tensor,
-            noise: torch.tensor
+            t: torch.Tensor,
+            noise: torch.Tensor
     ):
         """v-Parametrisierung (Salimans & Ho 2022, Appendix D).
 
@@ -398,7 +398,7 @@ class DiffusionProcess(nn.Module):
 
         if padding_mask is not None:
             keep = (~padding_mask).unsqueeze(-1).to(loss.dtype)              #(B, L, 1)     
-            denom = (keep.sum(dim=(1,2)) * loss.shape[-1].clamp(min=1.0))    #(B,)
+            denom = (keep.sum(dim=(1,2)) * loss.shape[-1]).clamp(min=1.0)    #(B,)
             loss = (loss * keep).sum(dim=(1, 2)) / denom                     #(B,)
         else:
             loss = loss.flatten(start_dim=1).mean(dim=1)                     #(B,)
