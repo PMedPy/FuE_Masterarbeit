@@ -23,7 +23,7 @@ DiffusionProcess
         Loss nur auf nicht-gepaddeten Positionen!
   
 
-Diese Datei enthaelt lediglich den Forward-Pfad. Sampling und der Reverse-Pfad
+Diese Datei enthaelt lediglich den Forward-Pfad und einige buffer (posterior) des Reverse-Pfades. Sampling und der Reverse-Pfad
 ist in "sampler.py" und "denoiser.py"
 
 Rausgelassen wurden:
@@ -31,6 +31,7 @@ Rausgelassen wurden:
 'self_condition' und 'x_self_cond'                                  -> Werden in generate.py auf 'False' gesetzt 
 'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timesteps = 1000 nutzt
 'p2_loss_weight'                                                    -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
+'normalize'; 'denormalize', 'auto-normalize'                        -> Ist auf "False" gestellt und damit  hinfaellig
 
 """
 
@@ -50,8 +51,8 @@ import torch.nn.functional as F
  andere folgt daraus zwangslaeufig.
 
  Cave!
- linear_beta_schedules wird im Code nie aufgerufen und stammt noch von Ho et al. (2020),
- Cosine muesste das Signal stabiler ueber die Schritte verteilt halten. Kann an aber nochmal testen
+ linear_beta_schedule wird im Code nie aufgerufen und stammt noch von Ho et al. (2020),
+ Cosine muesste das Signal stabiler ueber die Schritte verteilt halten. Kann man aber nochmal testen
 
 Beide Funktionen rechnen in float64 und werden erst beim Registrieren als
 Buffer auf float32 gecastet. Grund: alphas_cumprod ist ein Produkt ueber
@@ -86,7 +87,7 @@ def cosine_beta_schedule(timesteps, s = 0.008):
     return torch.clip(betas, 0.0, 0.999)
 
 
-beta_schedules = {                        #Ersetzt Zeilen "206 - 2011" in ampdiffusion.py
+beta_schedules = {                        #Ersetzt Zeilen "206 - 211" in ampdiffusion.py
     "linear": linear_beta_schedule,
     "cosine": cosine_beta_schedule
 }
@@ -328,7 +329,7 @@ class DiffusionProcess(nn.Module):
         # Vorschlag von Claude: Torres mittelt ueber ALLE Positionen, also auch ueber
         # das Padding. Dort ist das Ziel konstant 0 und der Denoiser setzt
         # den Input ohnehin auf 0 -- diese Positionen sind trivial und
-        # verduennen das Gradientensignal: bei 12 Residuen in L = 40
+        # verduennen das Gradientensignal: bei 12 Residuen in L = 42
         # stammen rund 70 % des Loss aus Padding. Hier wird nur ueber die
         # gueltigen Positionen gemittelt.
 
