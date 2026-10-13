@@ -132,7 +132,7 @@ class NoiseSchedule(nn.Module):
         reg("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
         reg("sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod))
 
-        # Umrechnung zwischen x_0-, eps- und v-Parametrisierung fuer im Training objective='pred_v' und spaeter Reverse-Pfad
+        # Umrechnung zwischen x_0-, eps- und v-Parametrisierung fuer im Training objective='pred_v' -> genutzt wird aber pred_x_0
         reg("sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod))
         reg("sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1.0))
 
@@ -170,15 +170,13 @@ class DiffusionProcess(nn.Module):
   Args:
         model: Denoiser mit Signatur model(x, t, padding_mask=...)
             -> (B, L, D). Darf None sein, wenn nur gerauscht wird.
-        seq_length: L = 40 Residuen OHNE CLS/EOS.
+        seq_length: L = 42.
         embed_dim: D. ESM2-8M: 320 oder ESM2-650M: 1280.
         timesteps: T = 1000.
         beta_schedule: "cosine" (Default) | "linear".
         objective: "pred_x0" | "pred_noise" | "pred_v".
         loss_type: "l2"  | "l1".
-        auto_normalize: False bei Torres, siehe Kommentar unten.
-        norm_scale, norm_shift: z = x / norm_scale + norm_shift.
-    
+
     """
     def __init__(
         self,
@@ -226,7 +224,7 @@ class DiffusionProcess(nn.Module):
             x_t = sqrt(alpha_bar_t) * x_0  +  sqrt(1 - alpha_bar_t) * eps
 
              Args:
-            x_start: x_0, bereits normalisiert.                
+            x_start: x_0, ESM-Embedding.                
             t: Zeitschritt pro Batch-Element.               
             noise: eps. None -> frisch gezogen.                     
 
@@ -275,7 +273,7 @@ class DiffusionProcess(nn.Module):
     def loss_fn(self):
         return F.l1_loss if self.loss_type == "l1" else F.mse_loss
 
-    def check_shape(self, x: torch.Tensor):         #Verbesserung der Fehlermeldung aus def p_losses (Z. 464), welche zwar bei shape Fehlern abbricht aber nichts genaues aussagt
+    def check_shape(self, x: torch.Tensor):         #Verbesserung der Fehlermeldung aus ampdiffusion: def p_losses (Z. 464), welche zwar bei shape Fehlern abbricht aber nichts genaues aussagt
         """Frueher Check der Shapes mit Meldung
          Args:
               x : zu pruefendes Embedding
@@ -285,8 +283,7 @@ class DiffusionProcess(nn.Module):
             raise ValueError(
                 f"Embedding hat Shape {tuple(x.shape)}, erwartet "
                 f"(B, {self.seq_length}, {self.embed_dim}). "
-                "Haeufigste Ursache: CLS/EOS wurden nicht abgeschnitten. "
-                "42 statt 40 Token verwendet?!"
+                "Haeufigste Ursache: CLS/EOS wurden nicht abgeschnitten."
             )
 
     def p_losses(
@@ -299,7 +296,7 @@ class DiffusionProcess(nn.Module):
         """Ein Trainingsschritt: rauschen, vorhersagen lassen, vergleichen.
 
         Args:
-            x_start: x_0, bereits normalisiert.                      
+            x_start: x_0, ESM-Embedding.                      
             t: Zeitschritt pro Batch-Element.                       
             padding_mask: True = Padding.                            
             noise: eps. None -> frisch gezogen.                     
@@ -347,10 +344,10 @@ class DiffusionProcess(nn.Module):
     def forward(
         self,
         x_start: torch.Tensor,
-        padding_mask,
-        noise 
+        padding_mask = None,
+        noise = None
     ):
-        """Trainings-Entry-Point: t ziehen, normalisieren, Loss.
+        """Trainings-Entry-Point: t ziehen, Loss.
 
         Args:
             x_start: ROHE ESM-Embeddings.                            
@@ -363,6 +360,5 @@ class DiffusionProcess(nn.Module):
 
         b = x_start.shape[0]
         t = torch.randint(0, self.num_timesteps, (b,), device=x_start.device).long()    #(B,)
-        x_start = self.normalize(x_start)                                               #(B, L, D)
 
         return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise)        #()
