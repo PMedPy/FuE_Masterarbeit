@@ -189,6 +189,7 @@ class DiffusionProcess(nn.Module):
         beta_schedule: str = "cosine",
         objective: str = "pred_x0",
         loss_type: str = "l2",
+        mask_loss: bool = False           # Ermöglicht spaeter das anstellen von der padding maske in p_losses
     ):
 
         super().__init__()
@@ -203,6 +204,7 @@ class DiffusionProcess(nn.Module):
         self.embed_dim = embed_dim
         self.objective = objective
         self.loss_type = loss_type
+        self.mask_loss = mask_loss
 
         self.schedule = NoiseSchedule(timesteps=timesteps, beta_schedule=beta_schedule)
         self.num_timesteps = self.schedule.num_timesteps
@@ -291,7 +293,7 @@ class DiffusionProcess(nn.Module):
             self,
             x_start: torch.Tensor,
             t: torch.Tensor,
-            padding_mask = None,
+            padding_mask: torch.Tensor,
             noise = None
     ):
         """Ein Trainingsschritt: rauschen, vorhersagen lassen, vergleichen.
@@ -333,7 +335,7 @@ class DiffusionProcess(nn.Module):
         # stammen rund 70 % des Loss aus Padding. Hier wird nur ueber die
         # gueltigen Positionen gemittelt.
 
-        if padding_mask is not None:
+        if self.mask_loss:                                                   # Nur wenn mask_loss = True (Torres default = False)
             keep = (~padding_mask).unsqueeze(-1).to(loss.dtype)              #(B, L, 1)     
             denom = (keep.sum(dim=(1,2)) * loss.shape[-1]).clamp(min=1.0)    #(B,)
             loss = (loss * keep).sum(dim=(1, 2)) / denom                     #(B,)
@@ -345,7 +347,7 @@ class DiffusionProcess(nn.Module):
     def forward(
         self,
         x_start: torch.Tensor,
-        padding_mask = None,
+        padding_mask: torch.Tensor,
         noise = None
     ):
         """Trainings-Entry-Point: t ziehen, Loss.
