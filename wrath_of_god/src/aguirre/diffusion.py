@@ -23,14 +23,15 @@ DiffusionProcess
         Loss nur auf nicht-gepaddeten Positionen!
   
 
-Diese Datei enthaelt lediglich den Foward-Pfad. Sampling und der Reverse-Pfad
+Diese Datei enthaelt lediglich den Forward-Pfad und einige buffer (posterior) des Reverse-Pfades. Sampling und der Reverse-Pfad
 ist in "sampler.py" und "denoiser.py"
 
 Rausgelassen wurden:
 'log_one_minus_alphas_cumprod'                                      -> Altlast aus anderem Paper (wird nicht verwendet)
 'self_condition' und 'x_self_cond'                                  -> Werden in generate.py auf 'False' gesetzt 
-'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timsteps = 1000 nutzt
+'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timesteps = 1000 nutzt
 'p2_loss_weight'                                                    -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
+'normalize'; 'denormalize', 'auto-normalize'                        -> Ist auf "False" gestellt und damit  hinfaellig
 
 """
 
@@ -39,7 +40,7 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.nn.fuctional as F
+import torch.nn.functional as F
 
 
 """ Die Beta-Schedules
@@ -50,8 +51,8 @@ import torch.nn.fuctional as F
  andere folgt daraus zwangslaeufig.
 
  Cave!
- linear_beta_schedules wird im Code nie aufgerufen und stammt noch von Ho et al. (2020),
- Cosine muesste das Signal stabieler ueber die Schritte verteilt halten. Kann an aber nochmal testen
+ linear_beta_schedule wird im Code nie aufgerufen und stammt noch von Ho et al. (2020),
+ Cosine muesste das Signal stabiler ueber die Schritte verteilt halten. Kann man aber nochmal testen
 
 Beide Funktionen rechnen in float64 und werden erst beim Registrieren als
 Buffer auf float32 gecastet. Grund: alphas_cumprod ist ein Produkt ueber
@@ -86,7 +87,7 @@ def cosine_beta_schedule(timesteps, s = 0.008):
     return torch.clip(betas, 0.0, 0.999)
 
 
-beta_schedules = {                        #Ersetzt Zeilen "206 - 2011" in ampdiffusion.py
+beta_schedules = {                        #Ersetzt Zeilen "206 - 211" in ampdiffusion.py
     "linear": linear_beta_schedule,
     "cosine": cosine_beta_schedule
 }
@@ -111,7 +112,7 @@ class NoiseSchedule(nn.Module):
                 f"erlaubt: {sorted(beta_schedules)}"
             )
 
-        betas = beta_schedules[beta_schedule](timesteps)            #Durch Dictionary muss die Funktion vorher aus beta_schedule ruasgenommen und gestartet werden
+        betas = beta_schedules[beta_schedule](timesteps)            #Durch Dictionary muss die Funktion vorher aus beta_schedule rausgenommen und gestartet werden
         timesteps, = betas.shape
         self.num_timesteps = int(timesteps)
 
@@ -132,7 +133,7 @@ class NoiseSchedule(nn.Module):
         reg("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
         reg("sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod))
 
-        # Umrechnung zwischen x_0-, eps- und v-Parametrisierung fuer im Training objective='pred_v' und spaeter Reverse-Pfad
+        # Umrechnung zwischen x_0-, eps- und v-Parametrisierung fuer im Training objective='pred_v' -> genutzt wird aber pred_x_0
         reg("sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod))
         reg("sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1.0))
 
@@ -144,7 +145,7 @@ class NoiseSchedule(nn.Module):
         reg("posterior_mean_coef2", (1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - alphas_cumprod))
 
     @staticmethod                                                                   #Da kein "self" Vorhanden waere das ganze ohne "staticmethod" irrefuehrend
-    def extract(a: torch.Tensor, t: torch.Tensor, x_shape: torch.Tensor):           #Tensoren angegeben -> Bessere Uebersichtlichkeit
+    def extract(a: torch.Tensor, t: torch.Tensor, x_shape: torch.Size):           #Tensoren angegeben -> Bessere Uebersichtlichkeit
         """a[t] herausgreifen und auf (B, 1, 1) umformen.
 
         Args:
@@ -170,29 +171,24 @@ class DiffusionProcess(nn.Module):
   Args:
         model: Denoiser mit Signatur model(x, t, padding_mask=...)
             -> (B, L, D). Darf None sein, wenn nur gerauscht wird.
-        seq_length: L = 40 Residuen OHNE CLS/EOS.
+        seq_length: L = 42.
         embed_dim: D. ESM2-8M: 320 oder ESM2-650M: 1280.
         timesteps: T = 1000.
         beta_schedule: "cosine" (Default) | "linear".
         objective: "pred_x0" | "pred_noise" | "pred_v".
         loss_type: "l2"  | "l1".
-        auto_normalize: False bei Torres, siehe Kommentar unten.
-        norm_scale, norm_shift: z = x / norm_scale + norm_shift.
-    
+
     """
     def __init__(
         self,
         model,
         *,
-        seq_length: int = 40,
+        seq_length: int = 42,
         embed_dim: int = 320,
         timesteps: int = 1000,
         beta_schedule: str = "cosine",
         objective: str = "pred_x0",
         loss_type: str = "l2",
-        auto_normalize: bool = False,                 #Wird das ueberhaupt benoetigt, da ausgeschaltet? Wenn ESM emb. nahe 1, dann eh nutzlos
-        norm_scale: float = 4.0,                      #Wenn nicht nahe 1, dann willkuerliches normalisieren auf andere Daten eh nicht zielfuehrend + Bei ESM 650M noch nicht erprobt!
-        norm_shift: float = 0.5,
     ):
 
         super().__init__()
@@ -211,47 +207,14 @@ class DiffusionProcess(nn.Module):
         self.schedule = NoiseSchedule(timesteps=timesteps, beta_schedule=beta_schedule)
         self.num_timesteps = self.schedule.num_timesteps
 
-        # die Konstanten passen zu ESM2-8M (D = 320)
-        # Sobaldder ESMWrapper auf ESM2-650M (D = 1280) umschaltet,
-        # muss scale/shift nachgemessen werden!
-        self.auto_normalize = auto_normalize              #siehe Kommentar oben
-        self.norm_scale = float(norm_scale)
-        self.norm_shift = float(norm_shift)
-
         # p2_loss_weight entfernt, da gesetztes gamma = 0 
         # -> ueberall exakt 1, also identisch
-
-    def normalize(self, x: torch.Tensor) -> torch.Tensor:
-        """ESM-Embedding -> Diffusionsraum.
-
-        Args:
-            x: rohes Embedding.                                      
-        Returns:
-            reskaliert, oder unveraendert bei auto_normalize=False.  
-        """
-        if not self.auto_normalize:
-            return x                                                 # (B, L, D)
-        return x / self.norm_scale + self.norm_shift                 # (B, L, D)
-
-    def denormalize(self, z: torch.Tensor) -> torch.Tensor:
-        """Diffusionsraum -> ESM-Embedding.
-
-        Args:
-            z: reskaliertes Embedding.                              
-        Returns:
-            zurueckgerechnet.                                        
-        """
-        if not self.auto_normalize:
-            return z                                                 # (B, L, D)
-        return (z - self.norm_shift) * self.norm_scale               # (B, L, D)
-
 
     def q_sample(
             self,
              x_start: torch.Tensor,
              t: torch.Tensor,
              noise = None,
-             padding_mask = None
     ):
         """Forward-Prozess: x_0 in einem Sprung auf Schritt t rauschen.
 
@@ -262,12 +225,9 @@ class DiffusionProcess(nn.Module):
             x_t = sqrt(alpha_bar_t) * x_0  +  sqrt(1 - alpha_bar_t) * eps
 
              Args:
-            x_start: x_0, bereits normalisiert.                
+            x_start: x_0, ESM-Embedding.                
             t: Zeitschritt pro Batch-Element.               
             noise: eps. None -> frisch gezogen.                     
-            padding_mask: True = Padding.                           
-                Wenn gesetzt, werden Padding-Positionen auf 0 gesetzt
-                (ABWEICHUNG, s.u.). Default None = wie Torres.
 
         Returns:
             x_t                                           
@@ -281,29 +241,7 @@ class DiffusionProcess(nn.Module):
         sqrt_1map = extract(self.schedule.sqrt_one_minus_alphas_cumprod, t, x_start.shape)     #Reine shape Zusatzzeile -> (B, 1, 1)
         x_t = sqrt_ab * x_start + sqrt_1map * noise                                            #(B, L, D)
         
-        if padding_mask is not None:
-            x_t = x_t.masked_fill(padding_mask.unsqueeze(-1), 0.0)        #(B, L, D) -> Optional wenn Padding Maske vorhanden, raus?
-        
         return x_t                                                        #(B, L, D)
-
-    def add_noise(                                 #Optional fuer Tests?
-            self,
-            x_start: torch.Tensor,
-            t,
-            noise,
-            padding_mask,
-            normalize: bool = True
-    ):
-
-        b = x_start.shape[0]
-        device = x_start.device                  # Wieder Absicherung fuer richtiges Device
-
-        if t is None:
-            t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
-
-        x0 = self.normalize(x_start) if normalize else x_start
-        x_t = self.q_sample(x0, t, noise=noise, padding_mask=padding_mask)
-        return x_t, noise, t
 
     def predict_v(
             self,
@@ -336,7 +274,7 @@ class DiffusionProcess(nn.Module):
     def loss_fn(self):
         return F.l1_loss if self.loss_type == "l1" else F.mse_loss
 
-    def check_shape(self, x: torch.Tensor):         #Verbesserung der Fehlermeldung aus def p_losses (Z. 464), welche zwar bei shape Fehlern abbricht aber nichts genaues aussagt
+    def check_shape(self, x: torch.Tensor):         #Verbesserung der Fehlermeldung aus ampdiffusion: def p_losses (Z. 464), welche zwar bei shape Fehlern abbricht aber nichts genaues aussagt
         """Frueher Check der Shapes mit Meldung
          Args:
               x : zu pruefendes Embedding
@@ -346,21 +284,20 @@ class DiffusionProcess(nn.Module):
             raise ValueError(
                 f"Embedding hat Shape {tuple(x.shape)}, erwartet "
                 f"(B, {self.seq_length}, {self.embed_dim}). "
-                "Haeufigste Ursache: CLS/EOS wurden nicht abgeschnitten. "
-                "42 statt 40 Token verwendet?!"
+                "Haeufigste Ursache: CLS/EOS wurden nicht abgeschnitten."
             )
 
     def p_losses(
             self,
             x_start: torch.Tensor,
             t: torch.Tensor,
-            padding_mask,
-            noise
+            padding_mask = None,
+            noise = None
     ):
         """Ein Trainingsschritt: rauschen, vorhersagen lassen, vergleichen.
 
         Args:
-            x_start: x_0, bereits normalisiert.                      
+            x_start: x_0, ESM-Embedding.                      
             t: Zeitschritt pro Batch-Element.                       
             padding_mask: True = Padding.                            
             noise: eps. None -> frisch gezogen.                     
@@ -392,7 +329,7 @@ class DiffusionProcess(nn.Module):
         # Vorschlag von Claude: Torres mittelt ueber ALLE Positionen, also auch ueber
         # das Padding. Dort ist das Ziel konstant 0 und der Denoiser setzt
         # den Input ohnehin auf 0 -- diese Positionen sind trivial und
-        # verduennen das Gradientensignal: bei 12 Residuen in L = 40
+        # verduennen das Gradientensignal: bei 12 Residuen in L = 42
         # stammen rund 70 % des Loss aus Padding. Hier wird nur ueber die
         # gueltigen Positionen gemittelt.
 
@@ -408,10 +345,10 @@ class DiffusionProcess(nn.Module):
     def forward(
         self,
         x_start: torch.Tensor,
-        padding_mask,
-        noise 
+        padding_mask = None,
+        noise = None
     ):
-        """Trainings-Entry-Point: t ziehen, normalisieren, Loss.
+        """Trainings-Entry-Point: t ziehen, Loss.
 
         Args:
             x_start: ROHE ESM-Embeddings.                            
@@ -422,9 +359,7 @@ class DiffusionProcess(nn.Module):
             Skalar-Loss.                                           
         """
 
-        self.check_shape(x_start)
         b = x_start.shape[0]
         t = torch.randint(0, self.num_timesteps, (b,), device=x_start.device).long()    #(B,)
-        x_start = self.normalize(x_start)                                               #(B, L, D)
 
         return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise)        #()
