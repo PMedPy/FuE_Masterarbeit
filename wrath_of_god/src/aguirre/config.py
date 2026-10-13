@@ -31,7 +31,8 @@ DATA_RAW = PROJECT_ROOT / "Torres_Model" / "note" / "eval" / "train_eval.csv"
 DATA_DIR = PROJECT_ROOT / "wrath_of_god" / "data"
 CACHE_DIR = DATA_DIR/ "cache"
 RUNS_DIR = PROJECT_ROOT / "wrath_of_god" / "runs"
-
+TMP_DIR = PROJECT_ROOT / "wrath_of_god" / "tmp"
+SPLIT_DIR = PROJECT_ROOT / "wrath_of_god" / "splits"
 
 #==Configurations==
 @dataclass
@@ -41,6 +42,7 @@ class Config:
     esm_model_name: str = "esm2_t6_8M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
     embed_dim: int = 320 # 1280 oder 320
     pep_max_len: int = 42
+    pep_min_len: int = 5 # Darunter biologische Unmöglichkeit. Filter
     device: str = (
         "cuda" if torch.cuda.is_available() 
         else "mps" if torch.backends.mps.is_available() 

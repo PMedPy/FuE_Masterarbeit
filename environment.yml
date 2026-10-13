@@ -28,12 +28,17 @@ dependencies:
   - pandas
   - matplotlib
   - seaborn
-    # ---------- PyTorch ----------
+  - pyarrow      # Parquet-Engine fuer pandas (to_parquet/read_parquet)
+
+  # ---------- PyTorch ----------
   # Ueber conda-forge, NICHT ueber pip: das pip-Wheel bringt ein eigenes
   # libomp mit, das mit dem llvm-openmp von numpy/scipy kollidiert
-  # (OMP Error #15, Abbruch beim import torch).
-  # Der eingestellte Kanal war "pytorch" -- conda-forge liefert
-  # PyTorch weiterhin, inkl. MPS auf Apple Silicon.
+  # (OMP Error #15). Der eingestellte Kanal war "pytorch" -- conda-forge
+  # liefert PyTorch weiterhin, inkl. MPS auf Apple Silicon.
+  #
+  # Auf einem Linux-Cluster mit CUDA kann das pip-Wheel die bessere
+  # Wahl sein; dort tritt der libomp-Konflikt meist nicht auf.
+  # Die Umgebung ist nicht uebertragbar -- auf dem Cluster neu bauen.
   - pytorch>=2.6
 
   # ---------- Notebooks / Entwicklung ----------
@@ -47,17 +52,21 @@ dependencies:
   - black
   - pytest
 
-  # ---------- Bioinformatik ----------
+    # ---------- Bioinformatik ----------
   - biopython
-  - mmseqs2
+  # mmseqs2 bewusst NICHT hier: die Conda-Variante zieht llvm-openmp
+  # mit, das mit dem libomp aus den PyTorch-Wheels kollidiert
+  # (OMP Error #15, Kernel-Crash beim import torch). mmseqs wird nur
+  # per subprocess aufgerufen, nie importiert -- daher getrennt:
+  #   macOS : brew install mmseqs2
+  #   Linux : statische Binary von
+  #           https://github.com/soedinglab/MMseqs2/releases
+  # Pruefen: mmseqs version
 
   # ---------- pip-only ----------
   - pip
   - pip:
-      # PyTorch -- das Wheel wird nach Plattform gewaehlt, auf der
-      # installiert wird: macOS -> MPS (Apple Metal),
-      # Linux/x86 -> CUDA-Laufzeit gebuendelt. Die Umgebung ist daher
-      # nicht uebertragbar: auf dem Cluster neu bauen.
+      
 
 
       # Protein-Sprachmodell: ESM-2 (esm2_t6_8M_UR50D)
