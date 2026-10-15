@@ -38,6 +38,7 @@ SPLIT_DIR = PROJECT_ROOT / "wrath_of_god" / "splits"
 @dataclass
 class Config:
     """Alle Hyperparameter eines Laufs an einer Stelle."""
+    seed: int = 666
     AS_alphabet: str = "LAGVSERTIDPKQNFYMHWC"
     esm_model_name: str = "esm2_t33_650M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
     embed_dim: int = 1280 # 1280 oder 320
@@ -50,4 +51,9 @@ class Config:
         else "mps" if torch.backends.mps.is_available() 
         else "cpu"
         )
+    timesteps: int = 1000
+    beta_schedule: str = "cosine"     # "cosine" | "linear"
+    objective: str = "pred_x0"        # "pred_x0" | "pred_noise" | "pred_v"
+    loss_type: str = "l2"             # "l2" | "l1"
+    mask_loss: bool = False           # True = Loss nur ueber gueltige Positionen
 
