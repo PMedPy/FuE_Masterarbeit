@@ -29,9 +29,9 @@ ist in "sampler.py" und "denoiser.py"
 Rausgelassen wurden:
 'log_one_minus_alphas_cumprod'                                      -> Altlast aus anderem Paper (wird nicht verwendet)
 'self_condition' und 'x_self_cond'                                  -> Werden in generate.py auf 'False' gesetzt 
-'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timesteps = 1000 nutzt
+'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timesteps = Config nutzt
 'p2_loss_weight'                                                    -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
-'normalize'; 'denormalize', 'auto-normalize'                        -> Ist auf "False" gestellt und damit  hinfaellig
+'normalize', 'denormalize', 'auto-normalize'                        -> Ist auf "False" gestellt und damit  hinfaellig
 
 """
 
@@ -41,7 +41,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from aguirre.config import Config
 
 """ Die Beta-Schedules
  beta_t ist die Varianz des Rauschens, das in EINEM Schritt dazukommt:
@@ -99,11 +99,11 @@ class NoiseSchedule(nn.Module):
     Haelt nur Konstanten -- keine Parameter, kein forward().
 
      Args:
-        timesteps: Anzahl Diffusionsschritte T (1000).
-        beta_schedule: "cosine" (Default) oder "linear".
+        timesteps: Anzahl Diffusionsschritte T wird von DiffusionProcess aus Config übergeben.
+        beta_schedule: wird von DiffusionProcess aus Config übergeben.
     
     """
-    def __init__(self, timesteps: int=1000, beta_schedule: str="cosine"):
+    def __init__(self, timesteps: int, beta_schedule: str):
         super().__init__()
 
         if beta_schedule not in beta_schedules:
@@ -171,42 +171,34 @@ class DiffusionProcess(nn.Module):
   Args:
         model: Denoiser mit Signatur model(x, t, padding_mask=...)
             -> (B, L, D). Darf None sein, wenn nur gerauscht wird.
-        seq_length: L = 42.
-        embed_dim: D. ESM2-8M: 320 oder ESM2-650M: 1280.
-        timesteps: T = 1000.
-        beta_schedule: "cosine" (Default) | "linear".
-        objective: "pred_x0" | "pred_noise" | "pred_v".
-        loss_type: "l2"  | "l1".
+        cfg: Config-Objekt. Gelesen werden:
+            pep_max_len   -> L, Sequenzlaenge in Residuen
+            embed_dim     -> D
+            timesteps     -> T
+            beta_schedule -> Default = "cosine" | "linear"
+            objective     -> "pred_x0" | "pred_noise" | "pred_v"
+            loss_type     -> "l2" | "l1"
+            mask_loss     -> Default = False | True = Loss nur ueber gueltige Positionen
 
     """
-    def __init__(
-        self,
-        model,
-        *,
-        seq_length: int = 42,
-        embed_dim: int = 320,
-        timesteps: int = 1000,
-        beta_schedule: str = "cosine",
-        objective: str = "pred_x0",
-        loss_type: str = "l2",
-        mask_loss: bool = False           # Ermöglicht spaeter das anstellen von der padding maske in p_losses
-    ):
-
+    def __init__(self, model, cfg: Config):
+        
         super().__init__()
 
-        if objective not in {"pred_x0", "pred_noise", "pred_v"}:
-            raise ValueError(f"unbekanntes objective {objective}")                 #Aufruf der Fehler, wenn etwas nicht stimmt schon hier statt erst spaeter
-        if loss_type not in {"l1", "l2"}:
-            raise ValueError(f"unbekannter loss_type {loss_type}")
+        if cfg.objective not in {"pred_x0", "pred_noise", "pred_v"}:
+            raise ValueError(f"unbekanntes objective {cfg.objective}")                 #Aufruf der Fehler, wenn etwas nicht stimmt schon hier statt erst spaeter
+        if cfg.loss_type not in {"l1", "l2"}:
+            raise ValueError(f"unbekannter loss_type {cfg.loss_type}")
 
         self.model = model
-        self.seq_length = seq_length
-        self.embed_dim = embed_dim
-        self.objective = objective
-        self.loss_type = loss_type
-        self.mask_loss = mask_loss
+        self.cfg = cfg
+        self.seq_length = cfg.pep_max_len
+        self.embed_dim = cfg.embed_dim
+        self.objective = cfg.objective
+        self.loss_type = cfg.loss_type
+        self.mask_loss = cfg.mask_loss
 
-        self.schedule = NoiseSchedule(timesteps=timesteps, beta_schedule=beta_schedule)
+        self.schedule = NoiseSchedule(timesteps=cfg.timesteps, beta_schedule=cfg.beta_schedule)
         self.num_timesteps = self.schedule.num_timesteps
 
         # p2_loss_weight entfernt, da gesetztes gamma = 0 
@@ -301,7 +293,8 @@ class DiffusionProcess(nn.Module):
         Args:
             x_start: x_0, ESM-Embedding.                      
             t: Zeitschritt pro Batch-Element.                       
-            padding_mask: True = Padding.                            
+            padding_mask: (B, L)True = Padding. -> geht in jedem Fall an den Denoiser (Attention).
+                                                   Ob sie zusaetzlich  in die Loss-Mittelung eingeht, entscheidet cfg.mask_loss.                            
             noise: eps. None -> frisch gezogen.                     
 
         Returns:
@@ -328,12 +321,13 @@ class DiffusionProcess(nn.Module):
 
         loss = self.loss_fn(model_out, target, reduction="none")     #(B, L, D)
 
-        # Vorschlag von Claude: Torres mittelt ueber ALLE Positionen, also auch ueber
-        # das Padding. Dort ist das Ziel konstant 0 und der Denoiser setzt
-        # den Input ohnehin auf 0 -- diese Positionen sind trivial und
-        # verduennen das Gradientensignal: bei 12 Residuen in L = 42
-        # stammen rund 70 % des Loss aus Padding. Hier wird nur ueber die
-        # gueltigen Positionen gemittelt.
+       # Torres mittelt ueber ALLE Positionen, also auch ueber das Padding.
+        # Dort ist das Ziel konstant 0 -- diese Positionen sind trivial und
+        # verduennen das Gradientensignal proportional zum Padding-Anteil:
+        # bei durchschnittlich halb gefuellten Sequenzen faellt der Loss
+        # rund um Faktor 2 zu niedrig aus (gemessen: 1.33 vs 0.72).
+        # mask_loss=True mittelt nur ueber gueltige Positionen,
+        # mask_loss=False reproduziert Torres fuer den direkten Vergleich.
 
         if self.mask_loss:                                                   # Nur wenn mask_loss = True (Torres default = False)
             keep = (~padding_mask).unsqueeze(-1).to(loss.dtype)              #(B, L, 1)     

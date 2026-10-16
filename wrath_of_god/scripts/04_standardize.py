@@ -51,6 +51,7 @@ from aguirre.esm_wrapper import ESMWrapper
 cfg = Config()
 
 # %% ==1 Pfade==
+TRACKED_DIR = PROJECT_ROOT / "wrath_of_god" / "data_tracked"
 SPLIT_PATH  = TRACKED_DIR / f"split_t{int(cfg.upper_seq2_threshold * 100):03d}.csv"
 FASTA_PATH  = DATA_DIR / "all19K_unclustered.faa"
 
