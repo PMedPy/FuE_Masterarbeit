@@ -44,7 +44,7 @@ import torch
 from tqdm.auto import tqdm
 
 # Aus Projekt:
-from aguirre.config import DATA_DIR, PROJECT_ROOT, Config
+from aguirre.config import DATA_DIR, TRACKED_DIR, Config
 from aguirre.data import read_fasta
 from aguirre.esm_wrapper import ESMWrapper
 
