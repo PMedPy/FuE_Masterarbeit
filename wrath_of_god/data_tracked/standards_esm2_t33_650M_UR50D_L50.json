@@ -1,0 +1,11 @@
+{
+  "esm_model_name": "esm2_t33_650M_UR50D",
+  "embed_dim": 1280,
+  "pep_min_len": 6,
+  "pep_max_len": 50,
+  "split": "train",
+  "split_file": "split_t075.csv",
+  "fasta_file": "all19K_unclustered.faa",
+  "n_sequences": 15507,
+  "n_residues": 331383
+}

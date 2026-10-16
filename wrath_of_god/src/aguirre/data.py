@@ -17,21 +17,22 @@ Abschnitt 3: Dataset, das vorberechnete Embeddings ausliefert.
 
 Wichtig: Embeddings EINMAL vorberechnen und cachen, nicht im __getitem__
 berechnen. Sonst laeuft ESM in jedem Epoch neu und jeder Testlauf wird zaeh.
+
+Notiz Paul: Das muss nochmal geändert werden. 
 """
 import torch
 from torch.utils.data import Dataset
-from aguirre.config import DATA_DIR, PROJECT_ROOT
+from aguirre.config import DATA_DIR, PROJECT_ROOT, CACHE_DIR, TRACKED_DIR, Config
 from pathlib import Path
 import pandas as pd
 import numpy as np
 import subprocess
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
+config = Config()
 
-#==Default Dateipfad für Fasta-Datei==
-fasta_datei_pfad = DATA_DIR / "unclustered_data.faa"
 
-def write_fasta(data: list[str], path: str | Path = fasta_datei_pfad):
+def write_fasta(data: list[str], path: str | Path):
     """Baut aus einer Liste von Peptidsequenzen eine Fasta-Datei"""
 
     with open(path, "w") as datei:
@@ -130,8 +131,8 @@ class ClusterSplitter():
         self.ids = ids # Liste aus read_fasta
         self.min_ident = min_ident
 
-        self.labels = None # AMP-IDs aus dem Cluster
-        self.threshold = None
+        self.labels = None # Clusterlabels (jedes Cluster eine ID)
+        self.threshold = None 
         self.id_to_idx, self.idx_to_id = self._build_index()
 
     
@@ -162,20 +163,24 @@ class ClusterSplitter():
         """Setzt self.labels, self.threshold."""
         A = self.build_graph(t)
         n_comp, labels = connected_components(csgraph = A, directed = False, return_labels = True) # Directed False ist hier redundant, weil Graph schon symmetrisch in build_graph
-        self.labels = labels # Labels als AMP IDS
+        self.labels = labels # Cluster labels
         self.threshold = t 
         return n_comp, labels
 
     def summary(self):
         """Bestimmung der Clustergrößen"""
-        sizes = np.bincount(self.labels)
+        #==Guardian==
+        if self.labels is None:
+            raise RuntimeError("erst cluster(t) aufrufen")
+
+        sizes = np.bincount(self.labels) # Für jeden Cluster die Anzahl an AMPs im Cluster
 
         summary_dict = {
             "threshold": self.threshold,
             "n_components": len(sizes),
             "largest": sizes.max(),
             "largest_share": sizes.max() / sizes.sum(),
-            "n_singletons": (sizes ==1).sum(),
+            "n_singletons": (sizes == 1).sum(),
             "median": np.median(sizes),
             "top10": np.sort(sizes)[::-1][:10],
         }
@@ -184,39 +189,95 @@ class ClusterSplitter():
     def assign_split(self, ratios=(0.8, 0.1, 0.1), mode="greedy", seed=0):
         """Ordnet die Cluster nach First-Fit Decreasing in Train/Test/Val Sets ein."""
 
-        sizes = np.bincount(self.labels)
+        #==Guardian==
+        if self.labels is None:
+            raise RuntimeError("erst cluster(t) aufrufen")
+        
+        if not np.isclose(sum(ratios), 1.0):
+            raise ValueError(f"ratios summieren zu {sum(ratios)}, nicht 1.0")
+
+        sizes = np.bincount(self.labels) # Für jeden Cluster die Anzahl an AMPs im Cluster
         n_total = sizes.sum()
-        targets = np.array(ratios) * n_total
-        order = np.argsort(sizes)[::-1] #Reihenfolge
+        targets = np.array(ratios) * n_total # Wie viele AMPs pro Set?
+
+        rng = np.random.default_rng(seed)
+        tiebreak = rng.random(len(sizes))
+        order = np.lexsort((tiebreak, -sizes)) #Reihenfolge Index der Cluster nach ihrer Größe
 
         #Buchhaltung:
-        filled = np.zeros(3)
-        cluster_to_split = np.array(len(sizes))
+        filled = np.zeros(len(ratios)) #Startwert für gefüllte Sets
+        cluster_to_split = np.zeros(len(sizes), dtype = np.int8) #Zeros, Anzahl = Cluster
 
         #Schleife:
         for c in order:
-            deficit = targets - filled
-            j = np.argmax(deficit)
-            cluster_to_split[c] = j
-            filled[j] += sizes[c]
-            split_per_node = cluster_to_split[self.labels]
-            #Hier Weiter machen
+            deficit = targets - filled # Wie viel AMPs pro Set sind noch übrig?
+            j = np.argmax(deficit) # Welches Set hat die meisten AMPs zu besetzen
+            cluster_to_split[c] = j # Jeder Cluster wird dem Set mit dem meisten AMPs zugeordnet
+            filled[j] += sizes[c] # Set mit höchsten Bedarf wird gefüllt mit ganzen Cluster
+        split_per_node = cluster_to_split[self.labels] # 
+        # DataFrame
+        namen = np.array(["train", "val", "test"])
+        split_namen = namen[split_per_node]
 
+        df = pd.DataFrame({
+            "id": self.idx_to_id,
+            "cluster": self.labels,
+            "split": split_namen,
+        })
+        return df
 
-
-
-
-    
-
-
-
-
-def load_sequences():
-    """Sequenzen laden und filtern -> list[str]."""
-    raise NotImplementedError
-
-
-class PeptideDataset(Dataset):
+class Data_coordinator(Dataset):
     """Liefert vorberechnete ESM-Embeddings + Padding-Maske."""
 
-    # TODO
+    def __init__(self, split: str, cfg: Config, standardize: bool = False):
+
+        #Data Laden
+        EMBEDDING_PATH = CACHE_DIR / f"{split}-Set_{cfg.esm_model_name}_L{cfg.pep_max_len}.pt"
+        daten = torch.load(EMBEDDING_PATH)
+        emb, lengths, ids = daten["emb"], daten["lengths"], daten["ids"]
+        assert emb.shape[2] == cfg.embed_dim, "Embedding-Dimensionen stimmen nicht überein."
+        assert lengths.shape[0] == len(ids), "Dateien bei Embedding verrutscht."
+
+        # Standardiesierung
+        if standardize is True:
+            STANDARDS_PATH = TRACKED_DIR / f"standards_{cfg.esm_model_name}_L{cfg.pep_max_len}.csv"
+            standards = pd.read_csv(filepath_or_buffer= STANDARDS_PATH, header = 0)
+            mean = torch.tensor(standards["mean"].to_numpy(), dtype=torch.float32) #Nur die Werte des dataframe aufrufen
+            std = torch.tensor(standards["std"].to_numpy(), dtype= torch.float32)
+            assert emb.shape[2] == mean.shape[0], "Standards passen nicht zu Embeddings"
+
+            emb_s =emb.sub_(mean).div_(std)
+            # Padding durch Maske zurücksetzen
+            maske = torch.arange(cfg.pep_max_len).unsqueeze(0) < lengths.unsqueeze(-1)
+            emb_s *= maske.unsqueeze(-1)
+            embedding = emb_s
+        else: 
+            embedding = emb
+            mean = None
+            std = None
+
+        #Instanzen
+        self.split = split
+        self.cfg = cfg
+        self.standardize = standardize
+        self.emb = embedding
+        self.lengths = lengths
+        self.ids = ids
+        self.mean = mean
+        self.std = std
+
+
+    def __getitem__(self, i):
+        return self.emb[i], self.lengths[i]
+
+    def __len__(self):
+        return self.emb.shape[0]
+
+    def destandardize(self, x: torch.Tensor):
+        if self.standardize is True:
+            mean = self.mean.to(x.device)
+            std = self.std.to(x.device)
+            out = x * std + mean
+            return out.cpu()
+        else:
+            return x.cpu()
