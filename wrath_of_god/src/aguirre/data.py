@@ -22,13 +22,14 @@ Notiz Paul: Das muss nochmal geändert werden.
 """
 import torch
 from torch.utils.data import Dataset
-from aguirre.config import DATA_DIR, PROJECT_ROOT
+from aguirre.config import DATA_DIR, PROJECT_ROOT, CACHE_DIR, TRACKED_DIR, Config
 from pathlib import Path
 import pandas as pd
 import numpy as np
 import subprocess
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
+config = Config()
 
 
 def write_fasta(data: list[str], path: str | Path):
@@ -228,7 +229,55 @@ class ClusterSplitter():
 class Data_coordinator(Dataset):
     """Liefert vorberechnete ESM-Embeddings + Padding-Maske."""
 
-    def __init__(self, split_table):
-        pass
+    def __init__(self, split: str, cfg: Config, standardize: bool = False):
 
-    # TODO
+        #Data Laden
+        EMBEDDING_PATH = CACHE_DIR / f"{split}-Set_{cfg.esm_model_name}_L{cfg.pep_max_len}.pt"
+        daten = torch.load(EMBEDDING_PATH)
+        emb, lengths, ids = daten["emb"], daten["lengths"], daten["ids"]
+        assert emb.shape[2] == cfg.embed_dim, "Embedding-Dimensionen stimmen nicht überein."
+        assert lengths.shape[0] == len(ids), "Dateien bei Embedding verrutscht."
+
+        # Standardiesierung
+        if standardize is True:
+            STANDARDS_PATH = TRACKED_DIR / f"standards_{cfg.esm_model_name}_L{cfg.pep_max_len}.csv"
+            standards = pd.read_csv(filepath_or_buffer= STANDARDS_PATH, header = 0)
+            mean = torch.tensor(standards["mean"].to_numpy(), dtype=torch.float32) #Nur die Werte des dataframe aufrufen
+            std = torch.tensor(standards["std"].to_numpy(), dtype= torch.float32)
+            assert emb.shape[2] == mean.shape[0], "Standards passen nicht zu Embeddings"
+
+            emb_s =emb.sub_(mean).div_(std)
+            # Padding durch Maske zurücksetzen
+            maske = torch.arange(cfg.pep_max_len).unsqueeze(0) < lengths.unsqueeze(-1)
+            emb_s *= maske.unsqueeze(-1)
+            embedding = emb_s
+        else: 
+            embedding = emb
+            mean = None
+            std = None
+
+        #Instanzen
+        self.split = split
+        self.cfg = cfg
+        self.standardize = standardize
+        self.emb = embedding
+        self.lengths = lengths
+        self.ids = ids
+        self.mean = mean
+        self.std = std
+
+
+    def __getitem__(self, i):
+        return self.emb[i], self.lengths[i]
+
+    def __len__(self):
+        return self.emb.shape[0]
+
+    def destandardize(self, x: torch.Tensor):
+        if self.standardize is True:
+            mean = self.mean.to(x.device)
+            std = self.std.to(x.device)
+            out = x * std + mean
+            return out.cpu()
+        else:
+            return x.cpu()

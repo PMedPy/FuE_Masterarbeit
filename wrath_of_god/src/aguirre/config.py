@@ -33,6 +33,7 @@ CACHE_DIR = DATA_DIR/ "cache"
 RUNS_DIR = PROJECT_ROOT / "wrath_of_god" / "runs"
 TMP_DIR = PROJECT_ROOT / "wrath_of_god" / "tmp"
 SPLIT_DIR = PROJECT_ROOT / "wrath_of_god" / "splits"
+TRACKED_DIR = PROJECT_ROOT / "wrath_of_god" / "data_tracked"
 
 #==Configurations==
 @dataclass
