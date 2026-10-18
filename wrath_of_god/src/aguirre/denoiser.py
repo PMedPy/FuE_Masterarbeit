@@ -41,8 +41,7 @@ from aguirre.config import Config
 class SinusoidalPosEmb(nn.Module):
     """Zeitschritt t -> (B, dim) Fourier-Features.
     
-    Der Skalar t
-    wird auf dim/2 Frequenzen abgebildet und als sin/cos-Paar ausgegeben.
+    Der Skalar t wird auf dim/2 Frequenzen abgebildet und als sin/cos-Paar ausgegeben.
     Ohne das bekaeme das MLP eine einzelne Zahl zwischen 0 und T und
     muesste die Aufloesung selbst lernen.
 
