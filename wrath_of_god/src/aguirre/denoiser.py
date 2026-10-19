@@ -26,6 +26,15 @@ Die padding_mask bleibt dabei (B, L), da ESM dies so erwartet.
 
 Eigene Keyword-Only-Argumente (`*,` in der Signatur) verwenden -- im Original
 rutscht in ddim_sample ein Argument positionell in den falschen Slot.
+
+Rausgelassen wurden:
+'classes'                          -> Wird nie aufgerufen
+'self_condition', 'x_self_cond'    -> In generate.py auf "False" gesetzt
+'if exists(t)'                     -> Unnoetiger Check, da es hinter t = self.time_mlp(t) steht und somit immer "True" ist
+'layer_idx', 'attn'                -> Werden nie benutzt unnoetig, da x neu zugewiesen wird (keine In-place Operation dazwischen)
+'r = x.clone()'                    -> Unnoetig, da x neu zugewiesen wird (keine In-place Operation dazwischen)
+'device = x.device'                -> Wird nie aufgerufen
+'time_dim = embed_dim'             -> Von Torres verander (ursprunglich = embed_dim * 4), dadurch nun unnoetig
 """
 
 import math
@@ -89,7 +98,7 @@ class DenoiseTransformer(nn.Module):
             embed_dim: int,
             pep_max_len: int,
             esm_layers: nn.ModuleList,
-            time_cond: str = "per_position"
+            time_cond: str
     ):
         super().__init__()
 

@@ -192,7 +192,7 @@ class DiffusionProcess(nn.Module):
 
         self.model = model
         self.cfg = cfg
-        self.seq_length = cfg.pep_max_len
+        self.pep_max_len = cfg.pep_max_len
         self.embed_dim = cfg.embed_dim
         self.objective = cfg.objective
         self.loss_type = cfg.loss_type
@@ -274,10 +274,10 @@ class DiffusionProcess(nn.Module):
               x : zu pruefendes Embedding
         """
         
-        if x.ndim != 3 or x.shape[1] != self.seq_length or x.shape[2] != self.embed_dim:
+        if x.ndim != 3 or x.shape[1] != self.pep_max_len or x.shape[2] != self.embed_dim:
             raise ValueError(
                 f"Embedding hat Shape {tuple(x.shape)}, erwartet "
-                f"(B, {self.seq_length}, {self.embed_dim}). "
+                f"(B, {self.pep_max_len}, {self.embed_dim}). "
                 "Haeufigste Ursache: CLS/EOS wurden nicht abgeschnitten."
             )
 
