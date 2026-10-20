@@ -53,6 +53,7 @@ class Config:
         else "cpu"
         )
     timesteps: int = 1000
+    time_cond: str = "per_position"   # Kann "per_position" oder "global" sein
     beta_schedule: str = "cosine"     # "cosine" | "linear"
     objective: str = "pred_x0"        # "pred_x0" | "pred_noise" | "pred_v"
     loss_type: str = "l2"             # "l2" | "l1"
