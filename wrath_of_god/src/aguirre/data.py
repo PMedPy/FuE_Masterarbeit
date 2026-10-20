@@ -247,7 +247,7 @@ class Data_coordinator(Dataset):
             assert emb.shape[2] == mean.shape[0], "Standards passen nicht zu Embeddings"
 
             emb_s =emb.sub_(mean).div_(std)
-            # Padding durch Maske zurücksetzen
+            # Padding/valid durch Valid-Maske zurücksetzen
             maske = torch.arange(cfg.pep_max_len).unsqueeze(0) < lengths.unsqueeze(-1)
             emb_s *= maske.unsqueeze(-1)
             embedding = emb_s
