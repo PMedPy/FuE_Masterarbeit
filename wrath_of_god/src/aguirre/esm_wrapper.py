@@ -100,10 +100,10 @@ class ESMWrapper(nn.Module):
 
         #==Paddingmaske mit booleans==
         positions = torch.arange(self.L_max).unsqueeze(0).to(self.device) #dims: (1, L_max)
-        padding_mask = positions < seqs_lengths # dims: (1, L_max) 
+        valid_mask = positions < seqs_lengths # dims: (1, L_max) 
 
         #==Ausgabe==
-        reps_return = reps_padded * padding_mask.unsqueeze(-1) # Aufgefüllt mit batch_converter Padding und 0 (hier Broadcasting über B und D?)
+        reps_return = reps_padded * valid_mask.unsqueeze(-1) # Aufgefüllt mit batch_converter Padding bzw Valid und 0 (hier Broadcasting über B und D?)
         return reps_return.cpu(), seqs_lengths.squeeze(1).cpu().tolist() # dims: representations (B,L_max, dims), Sequenzlängenliste
 
     @torch.no_grad()
