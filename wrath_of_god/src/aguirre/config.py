@@ -39,6 +39,7 @@ TRACKED_DIR = PROJECT_ROOT / "wrath_of_god" / "data_tracked"
 @dataclass
 class Config:
     """Alle Hyperparameter eines Laufs an einer Stelle."""
+    #==Grunlegendes==
     seed: int = 666
     AS_alphabet: str = "LAGVSERTIDPKQNFYMHWC"
     esm_model_name: str = "esm2_t33_650M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
@@ -52,10 +53,28 @@ class Config:
         else "mps" if torch.backends.mps.is_available() 
         else "cpu"
         )
+    #==Architektur==
+    n_esm_layers: int | None = None
+    
+    #==Schedule==
     timesteps: int = 1000
     time_cond: str = "per_position"   # Kann "per_position" oder "global" sein
     beta_schedule: str = "cosine"     # "cosine" | "linear"
     objective: str = "pred_x0"        # "pred_x0" | "pred_noise" | "pred_v"
     loss_type: str = "l2"             # "l2" | "l1"
-    mask_loss: bool = False           # True = Loss nur ueber gueltige Positionen
+    loss_reduction: str = "sequence"  # "sequence", "none" oder "token"
+    loss_weight_scheme: str = "none"         # "none" | "p2" | "min_snr"
+    loss_weight_normalize: bool = True # Für Stabilisierung von Loss-Skala, führt jedoch zu Batchweiser Renomierung. 
+                                       # Bei großen Bachtes kein Unterschied zur Globel Renomierung.
+    loss_weight_gamma: float = 5.0     # P2/min_snr-Korrektur nach Choi et al. 2022, Torresdefault: 0 für P2 = 1 für min_snr = 5
+    loss_weight_k: float = 1.0         # Numerische Stabilität bei P2-Korrektur
+    #==Trainer==
+    batch_size: int = 16
+    learning_rate: float = 1e-4
+    n_epochs: int = 100
+    ema_decay: float = 0.995
+    #train_num_steps: float = 1e5
+    adam_betas: tuple[float] = (0.9, 0.99)
+    max_grad_norm: float = 1.0
+    ema_update_every: int = 1
 

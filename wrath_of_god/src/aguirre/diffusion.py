@@ -33,6 +33,15 @@ Rausgelassen wurden:
 'p2_loss_weight'                                                    -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
 'normalize', 'denormalize', 'auto-normalize'                        -> Ist auf "False" gestellt und damit  hinfaellig
 
+Stattdessen wurde:
+'loss_elements'        -> elementweiser Fehler (B, L, D), unreduziert. Naht zum Trainer fuer Diagnosen
+'reduce_loss'          -> Reduktion von der Mathematik getrennt; Modus ueber cfg.loss_reduction
+'loss_reduction'       -> "none" (Torres) | "token" | "sequence"; ersetzt das Bool mask_loss
+'snr'                  -> Buffer alpha_bar / (1 - alpha_bar), Signal-Rausch-Verhaeltnis pro Schritt
+'loss_weight(t)'       -> w(t) pro Batch-Element; verallgemeinert das entfernte p2_loss_weight
+'loss_weight_scheme'   -> "none" (= Torres) | "p2" (Choi et al. 2022) | "min_snr" (Hang et al. 2023)
+'weight'-Argument      -> p_losses/reduce_loss nehmen w(t) an; None reproduziert Torres exakt
+
 """
 
 
@@ -93,7 +102,6 @@ beta_schedules = {                        #Ersetzt Zeilen "206 - 211" in ampdiff
 }
 
 
-
 class NoiseSchedule(nn.Module):
     """betas, alphas, alpha_bar und abgeleitete Groessen als Buffer.
     Haelt nur Konstanten -- keine Parameter, kein forward().
@@ -120,6 +128,7 @@ class NoiseSchedule(nn.Module):
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
+        snr = alphas_cumprod / (1.0 - alphas_cumprod).clamp(min= 1e-8)
 
         def reg(name: str, val: torch.Tensor):                                #lambda durch Funktion ersetzt -> Uebersichtlicher und besser Wiederverwendbar
             self.register_buffer(name, val.to(torch.float32))
@@ -128,6 +137,7 @@ class NoiseSchedule(nn.Module):
         reg("alphas", alphas)
         reg("alphas_cumprod", alphas_cumprod)
         reg("alphas_cumprod_prev", alphas_cumprod_prev)
+        reg("snr", snr.clamp(max=1e4)) # Clamp für numerische Instabilität
 
         # fuer q(x_t | x_0) also q_sample
         reg("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
@@ -178,8 +188,7 @@ class DiffusionProcess(nn.Module):
             beta_schedule -> Default = "cosine" | "linear"
             objective     -> "pred_x0" | "pred_noise" | "pred_v"
             loss_type     -> "l2" | "l1"
-            mask_loss     -> Default = False | True = Loss nur ueber gueltige Positionen
-
+            lost_reduction     -> Default = "Sequence"
     """
     def __init__(self, model, cfg: Config):
         
@@ -189,6 +198,10 @@ class DiffusionProcess(nn.Module):
             raise ValueError(f"unbekanntes objective {cfg.objective}")                 #Aufruf der Fehler, wenn etwas nicht stimmt schon hier statt erst spaeter
         if cfg.loss_type not in {"l1", "l2"}:
             raise ValueError(f"unbekannter loss_type {cfg.loss_type}")
+        if cfg.loss_reduction not in {"none", "token", "sequence"}:
+            raise ValueError(f"unbekannte loss_reduction {cfg.loss_reduction}")
+        if cfg.loss_weight_scheme not in {"none", "p2", "min_snr"}:
+            raise ValueError(f"unbekanntes loss_weight_scheme {cfg.loss_weight_scheme}")
 
         self.model = model
         self.cfg = cfg
@@ -196,13 +209,20 @@ class DiffusionProcess(nn.Module):
         self.embed_dim = cfg.embed_dim
         self.objective = cfg.objective
         self.loss_type = cfg.loss_type
-        self.mask_loss = cfg.mask_loss
+        self.loss_reduction = cfg.loss_reduction
+        self.loss_weight_scheme = cfg.loss_weight_scheme
+        self.loss_weight_gamma = cfg.loss_weight_gamma
+        self.loss_weight_k = cfg.loss_weight_k
+        self.loss_weight_normalize = cfg.loss_weight_normalize
 
+        #Scheduler
         self.schedule = NoiseSchedule(timesteps=cfg.timesteps, beta_schedule=cfg.beta_schedule)
         self.num_timesteps = self.schedule.num_timesteps
 
+
         # p2_loss_weight entfernt, da gesetztes gamma = 0 
         # -> ueberall exakt 1, also identisch
+
 
     def q_sample(
             self,
@@ -281,34 +301,22 @@ class DiffusionProcess(nn.Module):
                 "Haeufigste Ursache: CLS/EOS wurden nicht abgeschnitten."
             )
 
-    def p_losses(
+    def loss_elements(
             self,
             x_start: torch.Tensor,
             t: torch.Tensor,
             padding_mask: torch.Tensor,
-            noise = None
-    ):
-        """Ein Trainingsschritt: rauschen, vorhersagen lassen, vergleichen.
-
-        Args:
-            x_start: x_0, ESM-Embedding.                      
-            t: Zeitschritt pro Batch-Element.                       
-            padding_mask: (B, L)True = Padding. -> geht in jedem Fall an den Denoiser (Attention).
-                                                   Ob sie zusaetzlich  in die Loss-Mittelung eingeht, entscheidet cfg.mask_loss.                            
-            noise: eps. None -> frisch gezogen.                     
-
-        Returns:
-            Skalar-Loss.                                            
-        """
-
+            noise = None,
+    )-> torch.Tensor:
+        """Berechnet, loss für alle Elemente in (B,L,D)"""
+        #Guardian
         if self.model is None:
-            raise RuntimeError("DiffusionProcess model nicht uebergeben")     #Absicherung, dass alles auch mit mehreren py Branches korrekt aufgerufen wurde.
+                    raise RuntimeError("DiffusionProcess model nicht uebergeben")     #Absicherung, dass alles auch mit mehreren py Branches korrekt aufgerufen wurde.
         self.check_shape(x_start)
-
         if noise is None:
             noise = torch.randn_like(x_start)                        #(B, L, D)
 
-        x_t = self.q_sample(x_start, t, noise=noise)                 #(B, L, D)
+        x_t = self.q_sample(x_start, t, noise=noise) # Ziehen aus Zeit-Abhängiger Verteilung
 
         model_out = self.model(x_t, t, padding_mask=padding_mask)    #(B, L, D)
 
@@ -316,27 +324,163 @@ class DiffusionProcess(nn.Module):
             target = noise                                           #(B, L, D)
         elif self.objective == "pred_x0":
             target = x_start                                         #(B, L, D)
-        else:
+        elif self.objective == "pred_v":
             target = self.predict_v(x_start, t, noise)               #(B, L, D)
+        else: 
+            raise ValueError(
+                f"Es gibt kein Objective '{self.objective}', ein zulässiges Objektive wählen:\n"
+                "pred_noise\n"
+                "pred_x0\n"
+                "pred_v"
+            )
+        
+        #Ausgabe mit Guardian:
+        loss = self.loss_fn(model_out, target, reduction="none")
+        if loss.shape != x_start.shape:
+            raise ValueError(
+                            f"Loss hat falsche Shapes. Erwartet: {x_start.shape}, Tatsächlich: {loss.shape}"
+                            "Der Denoiser gibt einen anderen Shape zurueck als er bekommt. loss_fn =/= x_start"
+                        )
+        return loss #(B, L, D)
 
-        loss = self.loss_fn(model_out, target, reduction="none")     #(B, L, D)
+    def loss_weight(self, t:torch.Tensor) -> torch.Tensor | None:
+        """Gewichte w(t) pro Batch-Element fuer die Loss-Gewichtung über t
+        Args: 
+            t:(B,), long, Zeitschritt pro Batch-Element
+        
+        Returns:
+            float , oder None bei Schema 'none' (dann greift in reduce_loss der if weight
+            is not none -Zweig nicht)
+            """
+        
+        
+        if self.loss_weight_scheme == "none":
+            return None
+        
+        snr = self.schedule.extract(self.schedule.snr, t, t.shape)   # (B,)
+        
+        if self.loss_weight_scheme == "p2":
+            w = 1 / (self.loss_weight_k + snr )**self.loss_weight_gamma
+            return w
+        if self.loss_weight_scheme == "min_snr":
+            capped = snr.clamp(max = self.loss_weight_gamma)
+            if self.objective == "pred_x0":
+                w = capped
 
-       # Torres mittelt ueber ALLE Positionen, also auch ueber das Padding.
+            elif self.objective == "pred_noise":
+                num = capped
+                denom = snr
+                w = num / denom
+
+            elif self.objective == "pred_v":
+                num = capped
+                denom = snr + 1.0
+                w = num / denom
+            
+            else: 
+                raise ValueError(f"unbekanntes objektive {self.objective}")
+            
+        else: 
+            raise ValueError(
+                f"unbekanntes loss_weight_scheme {self.loss_weight_scheme}"
+            )
+        return w
+          
+                      
+    def reduce_loss(
+            self,
+            loss_el: torch.Tensor,
+            padding_mask: torch.Tensor,
+            *,
+            weight: torch.Tensor | None = None,
+            mode: str | None = None,
+    ) -> torch.Tensor:
+        """Elementweisen Fehler zu einem Skalar mitteln.
+
+        Alle Modi sind gewichtete Mittel UEBER SEQUENZEN und unterscheiden
+        sich nur im Gewicht omega_b:
+            "none"      omega_b = 1/B, ohne Maske (reproduziert Torres)
+            "sequence"  omega_b = 1/B, maskiert   -- jede Sequenz zaehlt gleich
+            "token"     omega_b = L_b / sum(L)    -- jedes Residuum zaehlt gleich
+
+        Torres mittelt ueber ALLE Positionen, also auch ueber das Padding.
+        Dort ist das Ziel konstant 0 -- diese Positionen sind trivial und
+        verduennen das Gradientensignal proportional zum Padding-Anteil:
+        bei durchschnittlich halb gefuellten Sequenzen faellt der Loss rund
+        um Faktor 2 zu niedrig aus (gemessen: 1.33 vs 0.72).
+
+        Args:
+            loss_el: (B, L, D) elementweiser Fehler aus loss_elements().
+            padding_mask: (B, L) bool, True = Padding.
+            weight: (B,) optionale Zusatzgewichtung pro Batch-Element,
+                z.B. w(t) einer P2-/Min-SNR-Gewichtung. None = aus.
+            mode: ueberschreibt cfg.loss_reduction. None = Config benutzen.
+
+        Returns:
+            () Skalar.
+        """
+        #Guardian
+        mode = self.loss_reduction if mode is None else mode
+        if mode not in {"none", "token", "sequence"}:
+            raise ValueError(
+                f"unbekannter mode {mode!r}, erlaubt: 'none', 'token', 'sequence'"
+            )
+        if loss_el.ndim != 3 or loss_el.shape[:2] != padding_mask.shape:
+            raise ValueError(
+                f"loss_el hat Shape {tuple(loss_el.shape)}, padding_mask "
+                f"{tuple(padding_mask.shape)}. Erwartet (B, L, D) und (B, L)."
+            )
+
+        # Torres mittelt ueber ALLE Positionen, also auch ueber das Padding.
         # Dort ist das Ziel konstant 0 -- diese Positionen sind trivial und
         # verduennen das Gradientensignal proportional zum Padding-Anteil:
         # bei durchschnittlich halb gefuellten Sequenzen faellt der Loss
-        # rund um Faktor 2 zu niedrig aus (gemessen: 1.33 vs 0.72).
-        # mask_loss=True mittelt nur ueber gueltige Positionen,
-        # mask_loss=False reproduziert Torres fuer den direkten Vergleich.
+        # rund um Faktor 2 zu niedrig aus (gemessen: 1.33 vs 0.72).    
 
-        if self.mask_loss:                                                   # Nur wenn mask_loss = True (Torres default = False)
-            keep = (~padding_mask).unsqueeze(-1).to(loss.dtype)              #(B, L, 1)     
-            denom = (keep.sum(dim=(1,2)) * loss.shape[-1]).clamp(min=1.0)    #(B,)
-            loss = (loss * keep).sum(dim=(1, 2)) / denom                     #(B,)
+        B, L, D = loss_el.shape
+        keep = (~padding_mask).unsqueeze(-1).to(loss_el.dtype)        # (B, L, 1)
+        valid_b = keep.sum(dim=(1, 2))                                # (B,)  = L_b
+
+        if mode == "none":
+            per_seq = loss_el.flatten(start_dim=1).mean(dim=1)        # (B,)
+            omega = loss_el.new_full((B,), 1.0 / B)                   # (B,)
         else:
-            loss = loss.flatten(start_dim=1).mean(dim=1)                     #(B,)
+            denom = (valid_b * D).clamp(min=1.0)                      # (B,)
+            per_seq = (loss_el * keep).sum(dim=(1, 2)) / denom        # (B,)
+            if mode == "sequence":
+                omega = loss_el.new_full((B,), 1.0 / B)               # (B,)
+            else:                                                     # "token"
+                omega = valid_b / valid_b.sum().clamp(min=1.0)        # (B,)
 
-        return loss.mean()                                                   #()
+        if weight is not None:
+            if weight.shape != (B,):
+                raise ValueError(
+                    f"weight hat Shape {tuple(weight.shape)}, erwartet ({B},)."
+                )
+            omega = omega * weight.to(dtype=omega.dtype, device=omega.device)
+            if self.loss_weight_normalize:
+                omega = omega / omega.sum().clamp(min=1e-12)              # neu normieren
+
+        return (per_seq * omega).sum()                                # ()
+            
+    def p_losses(
+            self,
+            x_start: torch.Tensor,
+            t: torch.Tensor,
+            padding_mask: torch.Tensor,
+            noise=None,
+            *,
+            weight: torch.Tensor | None = None,
+            mode: str | None = None,
+    ) -> torch.Tensor:
+        """Ein Trainingsschritt: rauschen, vorhersagen lassen, vergleichen.
+
+        Returns:
+            () Skalar-Loss.
+        """
+        loss_el = self.loss_elements(x_start, t, padding_mask, noise=noise)   # (B, L, D)
+        return self.reduce_loss(loss_el, padding_mask, weight=weight, mode=mode)
+    
 
     def forward(
         self,
@@ -358,4 +502,4 @@ class DiffusionProcess(nn.Module):
         b = x_start.shape[0]
         t = torch.randint(0, self.num_timesteps, (b,), device=x_start.device).long()    #(B,)
 
-        return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise)        #()
+        return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise, weight= self.loss_weight(t))        #()
