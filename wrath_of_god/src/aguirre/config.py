@@ -71,8 +71,9 @@ class Config:
     #==Trainer==
     batch_size: int = 16
     learning_rate: float = 1e-4
-    n_epochs: int = 100
+    n_epochs: int = 100                # Torres Default ist 102
     ema_decay: float = 0.995
+    shuffle: bool = True
     #train_num_steps: float = 1e5
     adam_betas: tuple[float] = (0.9, 0.99)
     max_grad_norm: float = 1.0

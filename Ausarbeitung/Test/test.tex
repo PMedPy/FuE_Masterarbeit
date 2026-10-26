@@ -1,0 +1,55 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[ngerman]{babel}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[backend=biber, style=numeric, sorting=none]{biblatex}
+\addbibresource{refs.bib}
+
+\title{Testdokument}
+\author{Paul Medebach}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Umlaute und Zitation}
+
+Dieser Satz enthält Umlaute (äöüß) und eine Zitation \cite{mueller2024}.
+Eine zweite Quelle zum Testen der Sortierung \cite{wang2024}.
+Beide zusammen: \cite{mueller2024,wang2024}.
+
+\section{Mathematik}
+
+Inline: $f(x) = e^{-x^2}$. Abgesetzt mit Nummerierung:
+
+\begin{equation}
+    \mathcal{L} = \mathbb{E}_{t,\mathbf{x}_0,\epsilon}
+    \left[ \left\| \epsilon - \epsilon_\theta(\mathbf{x}_t, t) \right\|^2 \right]
+    \label{eq:diffusion}
+\end{equation}
+
+Querverweis auf Gleichung~\eqref{eq:diffusion} und auf
+Abschnitt~\ref{sec:tabelle}.
+
+\section{Tabelle}
+\label{sec:tabelle}
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{lrr}
+        \hline
+        Komponente & Version & Status \\
+        \hline
+        latexmk & 4.88 & ok \\
+        biber   & 2.21 & ok \\
+        \hline
+    \end{tabular}
+    \caption{Toolchain}
+\end{table}
+
+\printbibliography
+
+\end{document}

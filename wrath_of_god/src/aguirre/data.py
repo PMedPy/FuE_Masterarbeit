@@ -231,6 +231,11 @@ class Data_coordinator(Dataset):
 
     def __init__(self, split: str, cfg: Config, standardize: bool = False):
 
+        if split not in {"train", "val", "test"}:
+            raise ValueError(
+                f"Es gibt kein DataSet mit split {split}"
+            )
+
         #Data Laden
         EMBEDDING_PATH = CACHE_DIR / f"{split}-Set_{cfg.esm_model_name}_L{cfg.pep_max_len}.pt"
         daten = torch.load(EMBEDDING_PATH)
@@ -281,3 +286,4 @@ class Data_coordinator(Dataset):
             return out.cpu()
         else:
             return x.cpu()
+
