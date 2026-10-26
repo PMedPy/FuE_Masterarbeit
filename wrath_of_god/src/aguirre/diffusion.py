@@ -33,8 +33,8 @@ DiffusionProcess
         sample(mask)                    -> x_0
             Ganze Kette von x_T bis x_0 (Rueckgabe im Modellraum)
   
-Diese Datei kennt beide Richtungen der Diffusion (forwar und reverse), aber kein Netz-Innenleben! (Ist in "denoiser.py")
-Auch nicht ueber Datein, Checkpoint oder Sequenzen! (Sind in "sampler.py")
+Diese Datei kennt beide Richtungen der Diffusion (forward und reverse), aber kein Netz-Innenleben! (Ist in "denoiser.py")
+Auch nicht ueber Dateien, Checkpoint oder Sequenzen! (Sind in "sampler.py")
 -> Reine Mathematik
 
 Rausgelassen wurden:
@@ -43,8 +43,8 @@ Rausgelassen wurden:
 'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timesteps = Config nutzt
 'p2_loss_weight'                                                    -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
 'normalize', 'denormalize', 'auto-normalize'                        -> Ist auf "False" gestellt und damit  hinfaellig
-'predict_noise_from_start'                                          -> Nur fuer DDIM gebraucht. Komplett fehlerhaft in Torrers
-'ModelPrediction / Rueckgabe (eps, x_0)                             -> q_posterior braucht allein x_0; model_predictions gibt nur x_0 zurueck und nicht mehr eps
+'predict_noise_from_start'                                          -> Nur fuer DDIM gebraucht -> DDIm fehlerhaft in Torrers, daher rausgelassen
+'ModelPrediction' / Rueckgabe (eps, x_0)                             -> q_posterior braucht allein x_0; model_predictions gibt nur x_0 zurueck und nicht mehr eps
 
 Stattdessen wurde:
 'loss_elements'        -> elementweiser Fehler (B, L, D), unreduziert. Naht zum Trainer fuer Diagnosen
@@ -53,7 +53,7 @@ Stattdessen wurde:
 'snr'                  -> Buffer alpha_bar / (1 - alpha_bar), Signal-Rausch-Verhaeltnis pro Schritt
 'loss_weight(t)'       -> w(t) pro Batch-Element; verallgemeinert das entfernte p2_loss_weight
 'loss_weight_scheme'   -> "none" (= Torres) | "p2" (Choi et al. 2022) | "min_snr" (Hang et al. 2023)
-'weight'-Argument      -> p_losses/reduce_loss nehmen w(t) an; None reproduziert Torres exakt
+'weight'-Argument      -> p_losses/reduce_loss nehmen w(t) an; None reproduziert Torres exakt (wenn weight=None gilt!)
 
 """
 
@@ -64,8 +64,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from aguirre.config import Config
 from tqdm.auto import tqdm
+from aguirre.config import Config
+
 
 """ Die Beta-Schedules
  beta_t ist die Varianz des Rauschens, das in EINEM Schritt dazukommt:
@@ -191,7 +192,7 @@ class NoiseSchedule(nn.Module):
     
       
 class DiffusionProcess(nn.Module):
-    """Forward-Rauschen und Trainings-Loss. Wrappt den Denoiser.
+    """Forward-Rauschen, Trainings-Loss und Reverse-Pfad. Wrappt den Denoiser.
     
   Args:
         model: Denoiser mit Signatur model(x, t, padding_mask=...)
@@ -203,7 +204,7 @@ class DiffusionProcess(nn.Module):
             beta_schedule   -> Default = "cosine" | "linear"
             objective       -> "pred_x0" | "pred_noise" | "pred_v"
             loss_type       -> "l2" | "l1"
-            lost_reduction  -> Default = "Sequence" | "none" | "token"
+            loss_reduction  -> Default = "Sequence" | "none" | "token"
             loss_weight_scheme, loss_weight_gamma, loss_weight_k,
             loss_weight_normalize
                             -> Gewichtung w(t), siehe loss_weight()
@@ -265,7 +266,7 @@ class DiffusionProcess(nn.Module):
             x_t                                           
          """
 
-        self.ckeck_shape(x_start)
+        self.check_shape(x_start)
         if noise is None:
             noise = torch.randn_like(x_start)            #(B, L, D) Ersetzt Lambda und exist Term aus ampdiffusion (Z. 45 - 52)
 
@@ -534,13 +535,7 @@ class DiffusionProcess(nn.Module):
                 f"loss_el hat Shape {tuple(loss_el.shape)}, padding_mask "
                 f"{tuple(padding_mask.shape)}. Erwartet (B, L, D) und (B, L)."
             )
-
-        # Torres mittelt ueber ALLE Positionen, also auch ueber das Padding.
-        # Dort ist das Ziel konstant 0 -- diese Positionen sind trivial und
-        # verduennen das Gradientensignal proportional zum Padding-Anteil:
-        # bei durchschnittlich halb gefuellten Sequenzen faellt der Loss
-        # rund um Faktor 2 zu niedrig aus (gemessen: 1.33 vs 0.72).    
-
+    
         B, L, D = loss_el.shape
         keep = (~padding_mask).unsqueeze(-1).to(loss_el.dtype)        # (B, L, 1)
         valid_b = keep.sum(dim=(1, 2))                                # (B,)  = L_b
@@ -710,7 +705,7 @@ class DiffusionProcess(nn.Module):
         if padding_mask.ndim != 2:
             raise ValueError(f"padding_mask hat Shape {padding_mask.shape}, erwartet (B, L)")
         if padding_mask.dtype != torch.bool:
-            raise ValueError(f"padding_mask hat dtype {padding_mask.dtype}, erwaretet torch.bool")
+            raise ValueError(f"padding_mask hat dtype {padding_mask.dtype}, erwartet torch.bool")
         B, L = padding_mask.shape
         if L != self.pep_max_len:
             raise ValueError(f"padding_mask hat L={L}, Config sagt pep_max_len={self.pep_max_len}")
