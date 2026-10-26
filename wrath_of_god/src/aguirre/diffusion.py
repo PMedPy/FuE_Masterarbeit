@@ -358,7 +358,7 @@ class DiffusionProcess(nn.Module):
             return None
         
         snr = self.schedule.extract(self.schedule.snr, t, t.shape)   # (B,)
-        
+
         if self.loss_weight_scheme == "p2":
             w = 1 / (self.loss_weight_k + snr )**self.loss_weight_gamma
             return w
@@ -486,7 +486,8 @@ class DiffusionProcess(nn.Module):
         self,
         x_start: torch.Tensor,
         padding_mask: torch.Tensor,
-        noise = None
+        noise = None,
+        mode: str | None = None,
     ):
         """Trainings-Entry-Point: t ziehen, Loss.
 
@@ -502,4 +503,4 @@ class DiffusionProcess(nn.Module):
         b = x_start.shape[0]
         t = torch.randint(0, self.num_timesteps, (b,), device=x_start.device).long()    #(B,)
 
-        return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise, weight= self.loss_weight(t))        #()
+        return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise, weight= self.loss_weight(t), mode= mode)        #()
