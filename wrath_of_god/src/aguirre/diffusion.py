@@ -636,18 +636,18 @@ class DiffusionProcess(nn.Module):
         if self.model is None:
             raise RuntimeError("DiffusionProcess model nicht uebergeben")
 
-        model_out = self.model(x, t, padding_mask=padding_mask)                # (B, L, D)
+        model_out = self.model(x, t, padding_mask=padding_mask)                #(B, L, D)
 
-        if self.objective == "pred_noise":
-            x_start = self.predict_start_from_noise(x, t, model_out)           # (B, L, D)
-        elif self.objective == "pred_x0":
-            x_start = model_out                                                # (B, L, D)
+        if self.objective == "pred_x0":
+            x_start = model_out                                                #(B, L, D)
+        elif self.objective == "pred_noise":
+            x_start = self.predict_start_from_noise(x, t, model_out)           #(B, L, D)
         elif self.objective == "pred_v":
-            x_start = self.predict_start_from_v(x, t, model_out)               # (B, L, D)
+            x_start = self.predict_start_from_v(x, t, model_out)               #(B, L, D)
         else:
             raise ValueError(f"unbekanntes objective {self.objective}")
 
-        return x_start                                                         # (B, L, D)
+        return x_start                                                         #(B, L, D)
 
     @torch.no_grad()
     def p_sample(
