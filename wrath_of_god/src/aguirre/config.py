@@ -74,6 +74,10 @@ class Config:
     n_epochs: int = 100                # Torres Default ist 102
     ema_decay: float = 0.995
     shuffle: bool = True
+    eval_subset_fract: float = 0.2
+    eval_subset_max: int = 350
+    eval_subset_min: int = 100
+    eval_t_grid: int = 20              # Stuetzstellen des festen t-Rasters in der Eval
     #train_num_steps: float = 1e5
     adam_betas: tuple[float] = (0.9, 0.99)
     max_grad_norm: float = 1.0
