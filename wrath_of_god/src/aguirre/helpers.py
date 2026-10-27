@@ -149,3 +149,47 @@ class Akkumulator:
             )
 
         
+
+# Laedt mean/std der Embedding-Dimensionen aus der Standards-CSV
+def load_standards(cfg_in: Config | None = None):
+    """mean/std pro Embedding-Dimension laden -> Einzige Quelle.
+
+    Der Sampler liest hier. Data_coordinator liest die CSV derzeit noch
+    selbst (data.py, STANDARDS_PATH) -> zwei Lesepfade auf dieselbe Datei,
+    das gehoert zusammengefuehrt. Bis dahin: wer 04_standardize.py neu
+    laufen laesst, aendert beide Pfade gleichzeitig.
+
+    Args:
+        cfg_in: Config. None -> Modul-Default
+
+    Returns:
+        (mean, std), beide (D,) float32.
+    """
+    c = cfg if cfg_in is None else cfg_in
+    path = TRACKED_DIR / f"standards_{c.esm_model_name}_L{c.pep_max_len}.csv"
+
+    #Guardian
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Standards nicht gefunden: {path}\n"
+            "Erst scripts/04_standardize.py laufen lassen."
+        )
+    df = pd.read_csv(path, header=0)
+    for col in ("mean", "std"):
+        if col not in df.columns:
+            raise ValueError(
+                f"Spalte '{col}' fehlt in {path}. Gefunden: {list(df.columns)}"
+            )
+
+    mean = torch.tensor(df["mean"].to_numpy(), dtype=torch.float32)   # (D,)
+    std = torch.tensor(df["std"].to_numpy(), dtype=torch.float32)     # (D,)
+
+    if mean.shape[0] != c.embed_dim:
+        raise ValueError(
+            f"Standards haben D={mean.shape[0]}, Config sagt {c.embed_dim}. "
+            "Falsches ESM-Modell oder falsche CSV."
+        )
+    if (std <= 0).any():
+        raise ValueError("std enthaelt Werte <= 0 -- Division wuerde explodieren.")
+
+    return mean, std

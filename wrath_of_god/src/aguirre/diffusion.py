@@ -17,14 +17,25 @@ NoiseSchedule
     auf (B, 1, 1) um, damit er ueber L und D broadcastet.
 
 DiffusionProcess
-    q_sample(x_0, t, noise)  -> x_t          (B, L, D)
-        Ueberblendung Signal <-> Rauschen, varianzerhaltend.
-    p_losses(x_0, t, mask)   -> Skalar
-        Loss nur auf nicht-gepaddeten Positionen!
+    Forward-Pfad:
+        q_sample(x_0, t, noise)  -> x_t          (B, L, D)
+            Ueberblendung Signal <-> Rauschen, varianzerhaltend.
+        p_losses(x_0, t, mask)   -> Skalar
+            Loss nur auf nicht-gepaddeten Positionen!
+        forward(x_0, mask)       -> Skalar
+            Trainings-Entry: t ziehen, dann p_losses
+    
+    Reverse-Pfad
+        model_predictions(x_t, t, mask) -> (x_0)
+            Uebergabe objective in Reverse-Pfad (Einzige Stelle, wo objective Reverse Pfad beruehrt)
+        p_sample(x_t, t, mask)          -> (x_{t-1}, x_0-Schaetzung)
+            Ancestral-Schritt, Posterior aus q_posterior()
+        sample(mask)                    -> x_0
+            Ganze Kette von x_T bis x_0 (Rueckgabe im Modellraum)
   
-
-Diese Datei enthaelt lediglich den Forward-Pfad und einige buffer (posterior) des Reverse-Pfades. Sampling und der Reverse-Pfad
-ist in "sampler.py" und "denoiser.py"
+Diese Datei kennt beide Richtungen der Diffusion (forward und reverse), aber kein Netz-Innenleben! (Ist in "denoiser.py")
+Auch nicht ueber Dateien, Checkpoint oder Sequenzen! (Sind in "sampler.py")
+-> Reine Mathematik
 
 Rausgelassen wurden:
 'log_one_minus_alphas_cumprod'                                      -> Altlast aus anderem Paper (wird nicht verwendet)
@@ -32,6 +43,8 @@ Rausgelassen wurden:
 'sampling_timesteps', 'is_ddim_sampling' und 'ddim_sampling_eta'    -> Wird in generate.py auf 'False' gesetzt weshalb es immer timesteps = Config nutzt
 'p2_loss_weight'                                                    -> gamma = 0, dadurch Zahl**0 = 1 fuer alle Werte und Regionen 
 'normalize', 'denormalize', 'auto-normalize'                        -> Ist auf "False" gestellt und damit  hinfaellig
+'predict_noise_from_start'                                          -> Nur fuer DDIM gebraucht -> DDIm fehlerhaft in Torrers, daher rausgelassen
+'ModelPrediction' / Rueckgabe (eps, x_0)                             -> q_posterior braucht allein x_0; model_predictions gibt nur x_0 zurueck und nicht mehr eps
 
 Stattdessen wurde:
 'loss_elements'        -> elementweiser Fehler (B, L, D), unreduziert. Naht zum Trainer fuer Diagnosen
@@ -40,7 +53,7 @@ Stattdessen wurde:
 'snr'                  -> Buffer alpha_bar / (1 - alpha_bar), Signal-Rausch-Verhaeltnis pro Schritt
 'loss_weight(t)'       -> w(t) pro Batch-Element; verallgemeinert das entfernte p2_loss_weight
 'loss_weight_scheme'   -> "none" (= Torres) | "p2" (Choi et al. 2022) | "min_snr" (Hang et al. 2023)
-'weight'-Argument      -> p_losses/reduce_loss nehmen w(t) an; None reproduziert Torres exakt
+'weight'-Argument      -> p_losses/reduce_loss nehmen w(t) an; None reproduziert Torres exakt (wenn weight=None gilt!)
 
 """
 
@@ -50,7 +63,10 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from tqdm.auto import tqdm
 from aguirre.config import Config
+
 
 """ Die Beta-Schedules
  beta_t ist die Varianz des Rauschens, das in EINEM Schritt dazukommt:
@@ -176,19 +192,22 @@ class NoiseSchedule(nn.Module):
     
       
 class DiffusionProcess(nn.Module):
-    """Forward-Rauschen und Trainings-Loss. Wrappt den Denoiser.
+    """Forward-Rauschen, Trainings-Loss und Reverse-Pfad. Wrappt den Denoiser.
     
   Args:
         model: Denoiser mit Signatur model(x, t, padding_mask=...)
             -> (B, L, D). Darf None sein, wenn nur gerauscht wird.
         cfg: Config-Objekt. Gelesen werden:
-            pep_max_len   -> L, Sequenzlaenge in Residuen
-            embed_dim     -> D
-            timesteps     -> T
-            beta_schedule -> Default = "cosine" | "linear"
-            objective     -> "pred_x0" | "pred_noise" | "pred_v"
-            loss_type     -> "l2" | "l1"
-            lost_reduction     -> Default = "Sequence"
+            pep_max_len     -> L, Sequenzlaenge in Residuen
+            embed_dim       -> D
+            timesteps       -> T
+            beta_schedule   -> Default = "cosine" | "linear"
+            objective       -> "pred_x0" | "pred_noise" | "pred_v"
+            loss_type       -> "l2" | "l1"
+            loss_reduction  -> Default = "Sequence" | "none" | "token"
+            loss_weight_scheme, loss_weight_gamma, loss_weight_k,
+            loss_weight_normalize
+                            -> Gewichtung w(t), siehe loss_weight()
     """
     def __init__(self, model, cfg: Config):
         
@@ -246,7 +265,8 @@ class DiffusionProcess(nn.Module):
         Returns:
             x_t                                           
          """
-        
+
+        self.check_shape(x_start)
         if noise is None:
             noise = torch.randn_like(x_start)            #(B, L, D) Ersetzt Lambda und exist Term aus ampdiffusion (Z. 45 - 52)
 
@@ -284,6 +304,91 @@ class DiffusionProcess(nn.Module):
         sqrt_1mab = extract(self.schedule.sqrt_one_minus_alphas_cumprod, t, x_start.shape)      #Reine shape Zusatzzeile -> (B, 1, 1)
         return sqrt_ab * noise - sqrt_1mab * x_start                                            # (B, L, D)
 
+    #Parametrisierungs-Umrechnung und Posterior (reine Schedule-Methriken ohne Netzaufruf)
+    def predict_start_from_noise(
+            self,
+            x_t: torch.Tensor,
+            t: torch.Tensor,
+            noise: torch.Tensor
+    ):
+        """x_0 aus x_t und eps zurueckrechnen -> Umkehr  von q_sample
+
+            x_0 = sqrt(1/alpha_bar) * x_t - sqrt(1/alpha_bar - 1) * eps
+
+        Gebraucht nur fuer objective = "pred_noise"
+
+        Args:
+        x_t: (B, L, D) verrauschtes Embedding.
+        t: (B,) Zeitschritt pro Batch-Element.
+        noise: (B, L, D) eps.
+
+        Returns:
+            (B, L, D) x_0.
+        """
+        extract = self.schedule.extract
+        return(
+            extract(self.schedule.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
+            - extract(self.schedule.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
+        )                                                                                  #(B, L, D)
+
+    def predict_start_from_v(
+            self,
+            x_t: torch.Tensor,
+            t: torch.Tensor,
+            v: torch.Tensor,
+    ):
+        """x_0 aus x_t und v zurueckrechnen -- Gegenstueck zu predict_v.
+    
+            x_0 = sqrt(alpha_bar) * x_t - sqrt(1 - alpha_bar) * v
+    
+        Gebraucht nur fuer objective='pred_v'.
+    
+        Args:
+            x_t: (B, L, D) verrauschtes Embedding.
+            t: (B,) Zeitschritt pro Batch-Element.
+            v: (B, L, D) v-Vorhersage des Netzes.
+    
+        Returns:
+            (B, L, D) x_0.
+        """
+        extract = self.schedule.extract
+        return (
+            extract(self.schedule.sqrt_alphas_cumprod, t, x_t.shape) * x_t
+            - extract(self.schedule.sqrt_one_minus_alphas_cumprod, t, x_t.shape) * v
+        )                                                                               #(B, L, D)
+
+    def q_posterior(
+            self,
+            x_start: torch.Tensor,
+            x_t: torch.Tensor,
+            t: torch.Tensor,
+    ):
+        """Mittelwert und Varianz von q(x_{t-1} | x_t, x_0).
+    
+            mu = coef1 * x_0 + coef2 * x_t
+    
+        Das ist die geschlossene Loesung des Reverse-Schritts, wenn x_0 bekannt ist
+        Das Netz liefert die Schaetzung dafuer, damit wird aus der Posterior der ancestral Sampler.
+    
+        Args:
+            x_start: (B, L, D) geschaetztes x_0.
+            x_t: (B, L, D) aktueller Zustand.
+            t: (B,) Zeitschritt pro Batch-Element.
+    
+        Returns:
+            (mean, var, log_var), alle (B, L, D). 'var' wird beim Sampling nicht gebraucht (p_sample nutzt log_var),
+            ist aber fuer Diagnosen praktisch
+        """
+        extract = self.schedule.extract
+        mean = (
+            extract(self.schedule.posterior_mean_coef1, t, x_t.shape) * x_start
+            + extract(self.schedule.posterior_mean_coef2, t, x_t.shape) * x_t
+        )                                                                                  # (B, L, D)
+        var = extract(self.schedule.posterior_variance, t, x_t.shape)                      # (B, L, D)
+        log_var = extract(self.schedule.posterior_log_variance_clipped, t, x_t.shape)
+        return mean, var, log_var
+                            
+
     @property
     def loss_fn(self):
         return F.l1_loss if self.loss_type == "l1" else F.mse_loss
@@ -307,7 +412,7 @@ class DiffusionProcess(nn.Module):
             t: torch.Tensor,
             padding_mask: torch.Tensor,
             noise = None,
-    )-> torch.Tensor:
+    ):
         """Berechnet, loss für alle Elemente in (B,L,D)"""
         #Guardian
         if self.model is None:
@@ -343,7 +448,7 @@ class DiffusionProcess(nn.Module):
                         )
         return loss #(B, L, D)
 
-    def loss_weight(self, t:torch.Tensor) -> torch.Tensor | None:
+    def loss_weight(self, t:torch.Tensor):
         """Gewichte w(t) pro Batch-Element fuer die Loss-Gewichtung über t
         Args: 
             t:(B,), long, Zeitschritt pro Batch-Element
@@ -394,7 +499,7 @@ class DiffusionProcess(nn.Module):
             *,
             weight: torch.Tensor | None = None,
             mode: str | None = None,
-    ) -> torch.Tensor:
+    ):
         """Elementweisen Fehler zu einem Skalar mitteln.
 
         Alle Modi sind gewichtete Mittel UEBER SEQUENZEN und unterscheiden
@@ -430,13 +535,7 @@ class DiffusionProcess(nn.Module):
                 f"loss_el hat Shape {tuple(loss_el.shape)}, padding_mask "
                 f"{tuple(padding_mask.shape)}. Erwartet (B, L, D) und (B, L)."
             )
-
-        # Torres mittelt ueber ALLE Positionen, also auch ueber das Padding.
-        # Dort ist das Ziel konstant 0 -- diese Positionen sind trivial und
-        # verduennen das Gradientensignal proportional zum Padding-Anteil:
-        # bei durchschnittlich halb gefuellten Sequenzen faellt der Loss
-        # rund um Faktor 2 zu niedrig aus (gemessen: 1.33 vs 0.72).    
-
+    
         B, L, D = loss_el.shape
         keep = (~padding_mask).unsqueeze(-1).to(loss_el.dtype)        # (B, L, 1)
         valid_b = keep.sum(dim=(1, 2))                                # (B,)  = L_b
@@ -503,4 +602,139 @@ class DiffusionProcess(nn.Module):
         b = x_start.shape[0]
         t = torch.randint(0, self.num_timesteps, (b,), device=x_start.device).long()    #(B,)
 
-        return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise, weight= self.loss_weight(t), mode= mode)        #()
+        return self.p_losses(x_start, t, padding_mask=padding_mask, noise=noise, weight= self.loss_weight(t), mode = mode)        #()
+
+
+    #Reverse-Pfad!
+    def model_predictions(
+            self,
+            x: torch.Tensor,
+            t: torch.Tensor,
+            padding_mask: torch.Tensor,
+    ):
+        """Netz rufen und die Ausgabe auf x_0 normalisieren.
+
+        Einzige Stelle, an der das objective den Reverse-Pfad beruehrt.
+        Alles darunter rechnet nur noch mit x_0.
+
+        eps von Torres verworfen -> Da keine Nutzung von ddim bei uns.
+        Außerdem auch kein Clipping: Torres ruft ueberall mit clip_x_start=False bzw. clip_denoised=False, und ESM-Embeddings liegen nicht in [-1, 1].
+        -> clamp(-1, 1) wuerde hier das Signal zerstoeren.
+
+        Args:
+            x: (B, L, D) x_t.
+            t: (B,) long, Zeitschritt pro Batch-Element.
+            padding_mask: (B, L) bool, True = Padding.
+
+        Returns:
+            (B, L, D) x_0-Schaetzung.
+        """
+        if self.model is None:
+            raise RuntimeError("DiffusionProcess model nicht uebergeben")
+
+        model_out = self.model(x, t, padding_mask=padding_mask)                #(B, L, D)
+
+        if self.objective == "pred_x0":
+            x_start = model_out                                                #(B, L, D)
+        elif self.objective == "pred_noise":
+            x_start = self.predict_start_from_noise(x, t, model_out)           #(B, L, D)
+        elif self.objective == "pred_v":
+            x_start = self.predict_start_from_v(x, t, model_out)               #(B, L, D)
+        else:
+            raise ValueError(f"unbekanntes objective {self.objective}")
+
+        return x_start                                                         #(B, L, D)
+
+    @torch.no_grad()
+    def p_sample(
+        self,
+        x: torch.Tensor,
+        t: int,
+        padding_mask: torch.Tensor
+    ):
+        """Ein Reverse- Schritt: x_t -> x_{t-1}
+            
+            x_{t-1} = mu_theta(x,_t, t) + sigma_t * z,     z ~ N(0, I)
+
+        Bei t = 0 kein rauschen mehr -> sonst waere das Ergebnis nicht x_0, sondern x_0 + Rauschen.
+
+        Args:
+            x: (B, L, D) x_t
+            t: Skalar (int), derselbe Schritt fuer den ganzen Batch
+            padding_mask: (B, L) bool, True = Padding
+
+        Returns:
+            (x_prev, x_start), x_start ist die aktuelle x_0-Schaetzung.
+            -> Nuetzlich um dem Sampler beim Konvergieren zuzusehen
+        """
+        b = x.shape[0]
+        batched_t = torch.full((b,), t, device = x.device, dtype=torch.long)
+
+        x_start = self.model_predictions(x, batched_t, padding_mask)
+        mean, _, log_var = self.q_posterior(x_start, x, batched_t)
+
+        noise = torch.randn_like(x) if t > 0 else torch.zeros_like(x)
+        x_prev = mean + (0.5 * log_var).exp() * noise
+        return x_prev, x_start
+
+    @torch.no_grad()
+    def sample(
+        self,
+        padding_mask: torch.Tensor,
+        *,
+        zero_padding: bool = True,
+        progress: bool = True
+    ):
+        """Ganze Reverse-Kette: x_T ~ N(0, I) bis x_0
+        
+        B und L kommen aus padding_mask, D aus der Config, deshalb kein eigenes shape-Argument.
+        Die Maske von aussen herein, genau wie bei forward() und loss_elements():
+        damit darf jede Sequenz im Batch ihre eigene Laenge haben -> Kein helpers Import notwendig
+
+        Rueckgabe liegt dann in dem Raum, in dem trainiert wurde.
+        Wenn dieser standardisiert war, muss der Aufruf zurueckgerechnet werden, bevor der lm_head drankommt -> Sampler.py
+
+        Args:
+            padding_mask: bool, True = Padding. Aus helpers.masker(lengths)
+            zero_padding: Padding-Positionen nach jedem Schritt auf 0 setzen.
+            Der Denoiser nullt sie intern, aber p_sample addiert danach wieder Rauschen drauf.
+            -> Fuer Ergebnis irrelevant (wird abgeschnitten), haelt aber x_t interpretierbar.
+
+            Returns:
+            x_0 -> Nicht dekodiert, nicht zurueckgerechnet.
+        """
+        if padding_mask.ndim != 2:
+            raise ValueError(f"padding_mask hat Shape {padding_mask.shape}, erwartet (B, L)")
+        if padding_mask.dtype != torch.bool:
+            raise ValueError(f"padding_mask hat dtype {padding_mask.dtype}, erwartet torch.bool")
+        B, L = padding_mask.shape
+        if L != self.pep_max_len:
+            raise ValueError(f"padding_mask hat L={L}, Config sagt pep_max_len={self.pep_max_len}")
+        if bool(padding_mask.all(dim=1).any()):
+            raise ValueError("Mindestens eine Sequenz ist vollständig maskiert (Laenge 0)")
+
+        device = self.schedule.betas.device
+        padding_mask = padding_mask.to(device)
+        keep = (~padding_mask).unsqueeze(-1)
+
+        was_training = self.training
+        self.eval()
+        try:
+            x = torch.randn(B, L, self.embed_dim, device=device)
+            if zero_padding:
+                x = x * keep
+
+            steps = reversed(range(0, self.num_timesteps))
+            if progress:
+                steps = tqdm(steps, total=self.num_timesteps, desc="sampling")
+
+            for t in steps:
+                x, _ = self.p_sample(x, t, padding_mask)
+                if zero_padding:
+                    x = x * keep   
+
+        finally:
+            self.train(was_training)
+
+        return x
+    
