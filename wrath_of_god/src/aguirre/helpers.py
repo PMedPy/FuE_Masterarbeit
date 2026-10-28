@@ -3,8 +3,9 @@
 #==Importe==
 import torch
 from pathlib import Path
-from aguirre.config import Config
+from aguirre.config import Config, TRACKED_DIR
 from dataclasses import asdict
+import pandas as pd
 cfg = Config()
 
 # Baut Padding oder Validmask (tensor B,L) aus Längen (siehe Data_Coordinator)
