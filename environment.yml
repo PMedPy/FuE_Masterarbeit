@@ -29,6 +29,7 @@ dependencies:
   - matplotlib
   - seaborn
   - pyarrow      # Parquet-Engine fuer pandas (to_parquet/read_parquet)
+  - pyyaml       # config.yaml im RunManager (yaml.safe_dump / safe_load)
 
   # ---------- PyTorch ----------
   # Ueber conda-forge, NICHT ueber pip: das pip-Wheel bringt ein eigenes
