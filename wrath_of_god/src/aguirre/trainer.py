@@ -89,11 +89,12 @@ class RunManager:
         Args:
             cfg: Config dieses Laufs.
             run_name: Kurzer Name fuer den Ordner. None -> nur Zeitstempel.
+            run_name ist also nicht plficht
         """
         self.cfg = cfg
-        self.cfg_dict = asdict(cfg)
+        self.cfg_dict = asdict(cfg) #Config im Dicitonairy Format
 
-        time_stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+        time_stamp = datetime.now().strftime("%Y-%m-%d_%H%M") #Aktuelles Datum
         if run_name is not None:
             foldername = f"train_{run_name}_{time_stamp}"
         else:
@@ -104,12 +105,12 @@ class RunManager:
         # mkdir(exist_ok=False) ist atomar -- zwei gleichzeitig startende
         # Cluster-Jobs mit demselben Zeitstempel koennen nicht beide gewinnen.
         i = 1
-        while True:
-            run_dir = base if i == 1 else base.parent / f"{base.name}_{i}"
+        while True: #Schleife wird solange ausgeführt, bis es ein break gibt
+            run_dir = base if i == 1 else base.parent / f"{base.name}_{i}" # i wurde um 1 erhöht und daher gilt letzeres
             try:
-                run_dir.mkdir(parents=True, exist_ok=False)
+                run_dir.mkdir(parents=True, exist_ok=False) #mkdir erstellt diesen Pfad
                 break
-            except FileExistsError:
+            except FileExistsError: #mkdir will erstellen, aber datei existiert schon
                 i += 1
                 if i > 100:
                     raise RuntimeError(
@@ -126,8 +127,8 @@ class RunManager:
 
         # Config SOFORT schreiben: ein abgebrochener Lauf ohne config.yaml
         # ist nicht rekonstruierbar, und genau die brechen ab.
-        self.config_path = self.run_dir / "config.yaml"
-        with open(self.config_path, "w", encoding="utf-8") as f:
+        self.config_path = self.run_dir / "config.yaml" 
+        with open(self.config_path, "w", encoding="utf-8") as f: # SChreiben in den config part
             yaml.safe_dump(
                 _yaml_safe(self.cfg_dict),
                 f,
@@ -137,7 +138,7 @@ class RunManager:
 
     #==Interne Helfer==
 
-    def _atomic_save(self, obj, path: Path) -> Path:
+    def _atomic_save(self, obj, path: Path) -> Path: #Path ist hier der Pfad für richtige Datei (z.b .pt)
         """torch.save ueber eine .tmp-Datei, dann atomar ersetzen.
 
         Path.replace ist auf demselben Dateisystem atomar: stirbt der Job
@@ -152,9 +153,9 @@ class RunManager:
             raise
         return path
 
-    def _check_keys(self, state: dict, keys=None) -> None:
+    def _check_keys(self, state: dict, keys=None) -> None: #Abgleich zwischen Keys und dem State (dem aktuellen Lauf)
         """Bricht ab, wenn Pflicht-Keys im state fehlen."""
-        keys = self._PFLICHT_KEYS if keys is None else keys
+        keys = self._PFLICHT_KEYS if keys is None else keys #Schau ob ein Key angegeben wird, wenn nicht, gelten die Pflichtkeys
         fehlend = [k for k in keys if k not in state]
         if fehlend:
             raise KeyError(
@@ -241,7 +242,7 @@ class RunManager:
         final = {k: state[k] for k in self._FINAL_KEYS if k in state}
         return self._atomic_save(final, self.run_dir / "final.pt")
 
-    @staticmethod
+    @staticmethod #Kann ohne Instanz aufgerufen werden
     def load_run(run_dir: str | Path, map_location="cpu") -> dict:
         """Fertigen Lauf laden, ohne einen RunManager zu bauen.
 
@@ -272,7 +273,7 @@ class RunManager:
 
 
 BRAUN_BLAU = LinearSegmentedColormap.from_list(
-    "braun_blau", ["#f5ead9", "#c89a62", "#7b7e97", "#3a5b86", "#15304f"]
+    "braun_blau", ["#f5ead9", "#c89a62", "#7b7e97", "#255390", "#0c0fcf"]
 )
 
 
@@ -308,7 +309,7 @@ class Trainer():
 
         # RunManager
         self.run_manager = run_manager
-        self.plots_dir = run_manager.run_dir / "plots"
+        self.plots_dir = run_manager.run_dir / "plots" # Nutzung der Directories aus dem RunManager
         self.plots_dir.mkdir(parents=True, exist_ok=True)
 
         # Modelle
@@ -318,12 +319,12 @@ class Trainer():
         self.EMA_Model = EMA_Model
 
         # Mini-Val fuer t-Loss
-        ds = Val_Data.dataset
-        lengths = self._lengths_of(ds)
+        ds = Val_Data.dataset #DataLoader verweißt auf das DataSet
+        lengths = self._lengths_of(ds) 
         N = len(lengths)
-        n = min(max(int(self.cfg.eval_subset_fract * N), self.cfg.eval_subset_min), self.cfg.eval_subset_max)
-        n = min(n, N)
-        # Laengenstratifizierung
+        n = min(max(int(self.cfg.eval_subset_fract * N), self.cfg.eval_subset_min), self.cfg.eval_subset_max) # Ist fract*N größer als die untere grenze für ein subset? und ist der sieger kleiner als die obere Grenze?
+        n = min(n, N) # Falls Set kleiner als min-wert ist
+        # Laengenstratifizierung - Sorgt dafür, dass Repraesentative Stichprobe aus Val_Data genommen wird für den t-Loss
         order = torch.argsort(lengths)
         pick = (torch.arange(n) * (N / n)).long().clamp(max=N - 1)
         idx = order[pick].tolist()
@@ -344,7 +345,7 @@ class Trainer():
         t_space = torch.linspace(0, cfg.timesteps - 1, int(cfg.eval_t_grid)).long()
         self.t_space = torch.unique(t_space)
 
-        # Lauf-Zustand
+        # Lauf-Zustand. history später für die metrics csv
         self.start_epoch = 0
         self.best_val = float("inf")
         self.history = {
@@ -414,7 +415,7 @@ class Trainer():
         token_loss_akk = Akkumulator()
 
         for batch in self.Train_Data:
-            x, p_mask, B = self._batch(batch)
+            x, p_mask, B = self._batch(batch) # direkte verwendung von Paddingmasks (werden in in _batch umgeschrieben)
 
             self.optimizer.zero_grad()
             loss_el, t = self.forward_train(x, p_mask)
@@ -438,7 +439,8 @@ class Trainer():
             loss.backward()
             # Clipping bei cfg.max_grad_norm, angepasst an die lucidrains-Linie,
             # auf der ampdiffusion.py aufsetzt (Default dort 1.0).
-            nn.utils.clip_grad_norm_(self.Model.parameters(), self.cfg.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.Model.parameters(), self.cfg.max_grad_norm) # Stabilitaet, da Batches schnell den Gradienten verändern können und zu Trainingsinstabilitaeten führen koennen
+            # Es wird die aktuelle Gradientennorm mit der vorgesehenen maximalen verglichen und gekappt, falls nötig
             self.optimizer.step()
             self.update_EMA()
             loss_akk.update(value=loss.item(), n=B)
@@ -473,7 +475,7 @@ class Trainer():
             for batch in self.Val_Data_sub:
                 x, p_mask, B = self._batch(batch)
                 L, D = x.shape[1], x.shape[2]
-                eps_slice = torch.randn(B, L, D, generator=der_g).to(self.device)
+                eps_slice = torch.randn(B, L, D, generator=der_g).to(self.device) #Rauschen für den Loss
                 t = torch.full((B,), int(t_val), dtype=torch.long, device=self.device)
 
                 loss_ele = self.Scheduler_val.loss_elements(
@@ -504,7 +506,7 @@ class Trainer():
 
         for batch in self.Val_Data:
             x, p_mask, B = self._batch(batch)
-            loss_el, t = self.forward_val(x, p_mask, generator=val_g)
+            loss_el, t = self.forward_val(x, p_mask, generator=val_g) # Hier kann direkt aus dem forwardpass bezogen werden. 
 
             seq_loss = self.Scheduler_val.reduce_loss(
                 loss_el=loss_el,
@@ -525,7 +527,7 @@ class Trainer():
         sequence_loss = sequence_loss_akk.compute()
         return loss_per_t, token_loss, sequence_loss
 
-    def _build_state(self, epoch: int) -> dict:
+    def _build_state(self, epoch: int) -> dict: #Dictionairy mit Model State dict
         """state-Dict nach dem Vertrag des RunManagers.
 
         Args:
@@ -553,7 +555,7 @@ class Trainer():
             )
         werte = [
             epoch,
-            self.history["train_loss"][-1],
+            self.history["train_loss"][-1], #Den letzten wert
             self.history["train_token_loss"][-1],
             self.history["val_sequence_loss"][-1],
             self.history["val_token_loss"][-1],
@@ -625,10 +627,10 @@ class Trainer():
         Returns:
             dict[str, Figure] mit "kurven" und "t_heatmap".
         """
-        if not self.history["epoch"]:
+        if not self.history["epoch"]: # Erst überlegen, was die methode vorher brauch
             raise RuntimeError("Keine Historie -- erst fit() laufen lassen.")
 
-        epochs = self.history["epoch"]
+        epochs = self.history["epoch"] 
         figs = {}
 
         fig, (ax_seq, ax_tok) = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
@@ -638,12 +640,12 @@ class Trainer():
         ax_seq.set_title(f"Sequence-Loss (mode={self.cfg.loss_reduction})")
 
         tok_train = [v for v in self.history["train_token_loss"] if v is not None]
-        if tok_train:
+        if tok_train: # Falls Token-Loss auch vorhanden. 
             ax_tok.plot(epochs[:len(tok_train)], tok_train, lw=2, color="#15304f", label="Train")
         ax_tok.plot(epochs, self.history["val_token_loss"], lw=2, color="#c89a62", label="Val (EMA)")
         ax_tok.set_title("Token-Loss")
 
-        for ax in (ax_seq, ax_tok):
+        for ax in (ax_seq, ax_tok): # Für beide Plots
             ax.set_xlabel("Epoche")
             ax.set_ylabel("Loss")
             ax.grid(True, lw=0.5, alpha=0.25)
