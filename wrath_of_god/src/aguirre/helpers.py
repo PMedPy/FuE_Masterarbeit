@@ -2,8 +2,9 @@
 
 #==Importe==
 import torch
+import pandas as pd
 from pathlib import Path
-from aguirre.config import Config
+from aguirre.config import Config, TRACKED_DIR
 from dataclasses import asdict
 cfg = Config()
 
@@ -148,7 +149,21 @@ class Akkumulator:
                 )
             )
 
-        
+
+# Pfad der Standards-CSV -> eine Stelle, an der der Name gebaut wird
+def standards_path(cfg_in: Config | None = None):
+    """Pfad der Standards-CSV.
+
+    Konvention aus 04_standardize.py: Modell UND Laengenfilter stehen im
+    Namen, weil 8M-Werte fuer 650M-Embeddings wertlos sind. Der Name wird
+    hier gebaut und nirgends sonst -- load_standards und der Sampler rufen
+    diese Funktion.
+
+    Args:
+        cfg_in: Config. None -> Modul-Default.
+    """
+    c = cfg if cfg_in is None else cfg_in
+    return TRACKED_DIR / f"standards_{c.esm_model_name}_L{c.pep_max_len}.csv"     
 
 # Laedt mean/std der Embedding-Dimensionen aus der Standards-CSV
 def load_standards(cfg_in: Config | None = None):
@@ -166,7 +181,7 @@ def load_standards(cfg_in: Config | None = None):
         (mean, std), beide (D,) float32.
     """
     c = cfg if cfg_in is None else cfg_in
-    path = TRACKED_DIR / f"standards_{c.esm_model_name}_L{c.pep_max_len}.csv"
+    path = standards_path(c)
 
     #Guardian
     if not path.exists():
