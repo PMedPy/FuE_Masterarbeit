@@ -34,6 +34,7 @@ from typing import Mapping, Sequence
 import pandas as pd
 
 from aguirre.config import Config
+from aguirre.data import read_fasta
 cfg = Config()
 
 AMINO_ACIDS = cfg.AS_alphabet
@@ -57,37 +58,43 @@ class SequenceSet:
     name: str
     data: pd.DataFrame
 
-    def __post_init__(self) -> None:
-        """Prueft, dass die Spalte "sequence" existiert und nur gueltige AS enthaelt."""
-        raise NotImplementedError
+def __post_init__(self) -> None:
+    """Prueft, dass die Spalte "sequence" existiert und nur gueltige AS enthaelt."""
+    if "sequence" not in self.data.columns:
+        raise ValueError(f"Spalte 'sequence' fehlt, vorhanden: {list(self.data.columns)}")
+    seqs = self.data["sequence"]
+    if seqs.isna().any() or (seqs == "").any():
+        raise ValueError("Leere oder fehlende Sequenzen im Set.")
+    invalid = set("".join(seqs)) - set(AMINO_ACIDS)
+    if invalid:
+        raise ValueError(f"Ungueltige Zeichen in Sequenzen: {sorted(invalid)}")
 
-    def __len__(self) -> int:
-        """Anzahl Sequenzen."""
-        raise NotImplementedError
+@classmethod
+def from_fasta(cls, path: Path, name: str) -> "SequenceSet":
+    ids, sequences = read_fasta(path)
+    data = pd.DataFrame({"id": ids, "sequence": sequences})
+    return cls(name=name, data=data)
 
-    @property
-    def sequences(self) -> list[str]:
-        """Liste aller Sequenzen (Spalte "sequence")."""
-        raise NotImplementedError
+@classmethod
+def from_csv(cls, path: Path, name: str, sequence_col: str = "sequence") -> "SequenceSet":
+    data = pd.read_csv(path)
+    if sequence_col != "sequence":
+        data = data.rename(columns={sequence_col: "sequence"})
+    return cls(name=name, data=data)
 
-    @classmethod
-    def from_fasta(cls, path: Path, name: str) -> "SequenceSet":
-        """Liest eine FASTA-Datei ein und gibt ein SequenceSet zurueck."""
-        raise NotImplementedError
+def with_columns(self, new_cols: pd.DataFrame) -> "SequenceSet":
+    if len(new_cols) != len(self.data):
+        raise ValueError("new_cols hat eine andere Zeilenzahl als das Set.")
+    # gleiche Spaltennamen werden ueberschrieben (z.B. bei erneutem Evaluator-Lauf)
+    old = self.data.drop(columns=new_cols.columns.intersection(self.data.columns))
+    data = pd.concat([old, new_cols.set_axis(old.index)], axis=1)
+    return SequenceSet(name=self.name, data=data)
 
-    @classmethod
-    def from_csv(cls, path: Path, name: str, sequence_col: str = "sequence") -> "SequenceSet":
-        """Liest eine CSV ein; benennt sequence_col ggf. in "sequence" um."""
-        raise NotImplementedError
-
-    def with_columns(self, new_cols: pd.DataFrame) -> "SequenceSet":
-        """Gibt eine KOPIE zurueck, an die new_cols (gleicher Index) angehaengt wurden."""
-        raise NotImplementedError
-
-    def subset(self, mask: pd.Series, name: str | None = None) -> "SequenceSet":
-        """Gibt die Zeilen zurueck, in denen mask True ist (optional mit neuem Namen)."""
-        raise NotImplementedError
-
+def subset(self, mask: pd.Series, name: str | None = None) -> "SequenceSet":
+    if mask.dtype != bool or len(mask) != len(self.data):
+        raise ValueError("mask muss ein bool-Series in der Laenge des Sets sein.")
+    data = self.data.loc[mask.to_numpy()].reset_index(drop=True)
+    return SequenceSet(name=name or self.name, data=data)
 
 # ---------------------------------------------------------------------------
 # 2. Scorer: berechnen Pro-Sequenz-Spalten
