@@ -42,8 +42,8 @@ class Config:
     #==Grunlegendes==
     seed: int = 666
     AS_alphabet: str = "LAGVSERTIDPKQNFYMHWC"
-    esm_model_name: str = "esm2_t33_650M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
-    embed_dim: int = 1280 # 1280 oder 320
+    esm_model_name: str = "esm2_t6_8M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
+    embed_dim: int = 320 # 1280 oder 320
     pep_max_len: int = 50
     pep_min_len: int = 6 # Darunter biologische Unmöglichkeit. Filter
     lower_seq2_threshold: float = 0.3 # Spart Rechenzeit
@@ -63,7 +63,7 @@ class Config:
     objective: str = "pred_x0"        # "pred_x0" | "pred_noise" | "pred_v"
     loss_type: str = "l2"             # "l2" | "l1"
     loss_reduction: str = "sequence"  # "sequence", "none" oder "token"
-    loss_weight_scheme: str = "none"         # "none" | "p2" | "min_snr"
+    loss_weight_scheme: str = "min_snr"         # "none" | "p2" | "min_snr"
     loss_weight_normalize: bool = True # Für Stabilisierung von Loss-Skala, führt jedoch zu Batchweiser Renomierung. 
                                        # Bei großen Bachtes kein Unterschied zur Globel Renomierung.
     loss_weight_gamma: float = 5.0     # P2/min_snr-Korrektur nach Choi et al. 2022, Torresdefault: 0 für P2 = 1 für min_snr = 5

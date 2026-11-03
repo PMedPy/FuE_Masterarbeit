@@ -66,6 +66,39 @@ Danach genügt `ssh thm`, und in `rsync` schreibst du `thm:` statt der langen
 Adresse. `ControlMaster` hält die Verbindung zehn Minuten offen, sodass
 mehrere Befehle hintereinander keine neue Sitzung aufbauen.
 
+**Beide Befehle laufen LOKAL auf dem Mac.** Der Alias `thm` steht nur in der
+Config auf dem Mac, und der zu übertragende Schlüssel liegt ebenfalls dort. Auf
+dem Cluster gestartet, scheitert `ssh-copy-id thm` an
+`Could not resolve hostname thm`.
+
+### Prüfen, ob der Schlüssel wirklich greift
+
+`ControlPersist` hält die Verbindung nach dem Abmelden noch zehn Minuten offen
+und benutzt sie wieder — ein einfaches `ssh thm` fragt dann auch dann nichts,
+wenn der Schlüssel gar nicht funktioniert. Der aussagekräftige Test umgeht das:
+
+```bash
+ssh -O exit thm                                   # offene Verbindung schliessen
+ssh -o ControlPath=none thm 'echo SCHLUESSEL-OK'
+```
+
+Kommt `SCHLUESSEL-OK` ohne Abfrage, sitzt er. Fragt er nach dem Passwort,
+steht der eigene Schlüssel nicht in `~/.ssh/authorized_keys` auf dem Cluster:
+
+```bash
+cat ~/.ssh/id_ed25519.pub          # lokal
+ssh thm 'cat ~/.ssh/authorized_keys'
+```
+
+`ssh-copy-id` hängt an und löscht nichts, kann also gefahrlos wiederholt werden.
+
+### Netz: der Cluster ist nur intern erreichbar
+
+`slurm-cluster.mni.thm.de` zeigt auf `10.48.19.201`, eine private Adresse. Von
+ausserhalb des THM-Netzes meldet SSH `Could not resolve hostname` — dann fehlt
+das VPN, nicht die Config. Gegenprobe nach dem Verbinden:
+`ping -c 2 slurm-cluster.mni.thm.de`
+
 ---
 
 ## 2. Dateien hin und zurück
@@ -305,6 +338,9 @@ behält also seine Zeilen.
 | `cuda: False` auf dem Login-Knoten | dort ist keine GPU | normal, im Job prüfen |
 | `module: command not found` | es gibt kein Modulsystem | Miniforge im Home |
 | Job sofort `FAILED`, 10 s Laufzeit | meist Pfad oder Umgebung | `cat slurm_logs/*_<ID>.err` |
+| `Could not resolve hostname thm` | Befehl auf dem Cluster statt lokal gestartet | Prompt prüfen, `exit`, lokal wiederholen |
+| `Could not resolve hostname slurm-cluster...` | nicht im THM-Netz | VPN verbinden |
+| trotz Schlüssel Passwortabfrage | Schlüssel nie mit `ssh-copy-id` übertragen | lokal `ssh-copy-id thm` |
 
 Noch offen: auf dem Login-Knoten meldet sich `torch 2.14.1` ohne CUDA, auf dem
 Rechenknoten `2.6.0+cu124` mit CUDA. Es liegen offenbar zwei Installationen im

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=fue-train
+#SBATCH --job-name=AMP_Torres-train
 #SBATCH -w bioinf-euryale.mni.thm.de
 #SBATCH --gpus 1
 #SBATCH --cpus-per-task 4
 #SBATCH --mem 32G
 #SBATCH --time 0-12:00:00
-#SBATCH --mail-user=pemd95@mni.thm.de
+#SBATCH --mail-user=paul.erik.medebach@lse.thm.de
 #SBATCH --mail-type=END,FAIL
 #SBATCH --output=slurm_logs/%x_%j.out
 #SBATCH --error=slurm_logs/%x_%j.err
@@ -21,9 +21,14 @@ set -euo pipefail
 # ---- anpassen ----------------------------------------------------------
 PROJECT="${HOME}/FuE_Masterarbeit"
 ENV_NAME="fue-amp"
-RUN_NAME="cluster01"
-EPOCHS=50
-ESM="8M"
+
+# Variante A -- 06_train.py: Hyperparameter ueber Flags, Config bleibt unberuehrt
+# SCRIPT="scripts/06_train.py"
+# ARGS="--name cluster01 --esm 8M --epochs 103"
+
+# Variante B -- 07_test_train.py: alles kommt aus config.py
+SCRIPT="scripts/07_test_train.py"
+ARGS=""
 # -----------------------------------------------------------------------
 
 cd "$PROJECT/wrath_of_god"
@@ -43,10 +48,7 @@ echo "Job      : ${SLURM_JOB_ID:-interaktiv}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "GPU      : keine"
 python -c "import torch; print('torch', torch.__version__, '| build-cuda:', torch.version.cuda, '| verfuegbar:', torch.cuda.is_available())"
 
-python scripts/06_train.py \
-    --name "$RUN_NAME" \
-    --esm "$ESM" \
-    --epochs "$EPOCHS"
+python "$SCRIPT" $ARGS
 
 # ===========================================================================
 # Container-Variante, falls der native Lauf scheitert:
