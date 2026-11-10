@@ -54,11 +54,11 @@ class SequenceSet:
         data: DataFrame mit mindestens der Spalte "sequence". Jede weitere
             Spalte ist eine Pro-Sequenz-Eigenschaft (Scorer-Ausgabe).
     """
-
+    # Verhält sich wie eine __init__
     name: str
     data: pd.DataFrame
 
-def __post_init__(self) -> None:
+def __post_init__(self) -> None: #Gut, wenn es fehlt 
     """Prueft, dass die Spalte "sequence" existiert und nur gueltige AS enthaelt."""
     if "sequence" not in self.data.columns:
         raise ValueError(f"Spalte 'sequence' fehlt, vorhanden: {list(self.data.columns)}")
@@ -196,6 +196,7 @@ class APEXScorer(Scorer):
         raise NotImplementedError
 
 
+
 # ---------------------------------------------------------------------------
 # 3. Evaluator: Scorer ausfuehren, Ergebnisse cachen
 # ---------------------------------------------------------------------------
@@ -258,6 +259,23 @@ class MICFilter(Filter):
 
     def apply(self, seqset: SequenceSet) -> SequenceSet:
         raise NotImplementedError
+
+class LengthFilter(Filter):
+    """Behaelt Sequenzen mit min_len <= length <= max_len (Spalte "length")."""
+
+    def __init__(self, min_len: int, max_len: int) -> None:
+        if min_len > max_len:
+            raise ValueError(f"min_len ({min_len}) groesser als max_len ({max_len}).")
+        self.min_len = min_len
+        self.max_len = max_len
+
+    @classmethod
+    def from_config(cls, cfg: Config) -> "LengthFilter":
+        return cls(min_len=cfg.pep_min_len, max_len=cfg.pep_max_len)
+
+    def apply(self, seqset: SequenceSet) -> SequenceSet:
+        mask = seqset.data["length"].between(self.min_len, self.max_len)
+        return seqset.subset(mask, name=f"{seqset.name}_len{self.min_len}-{self.max_len}")
 
 
 # ---------------------------------------------------------------------------
