@@ -42,8 +42,8 @@ class Config:
     #==Grunlegendes==
     seed: int = 666
     AS_alphabet: str = "LAGVSERTIDPKQNFYMHWC"
-    esm_model_name: str = "esm2_t6_8M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
-    embed_dim: int = 320 # 1280 oder 320
+    esm_model_name: str = "esm2_t33_650M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
+    embed_dim: int = 1280 # 1280 oder 320
     pep_max_len: int = 50
     pep_min_len: int = 6 # Darunter biologische Unmöglichkeit. Filter
     lower_seq2_threshold: float = 0.3 # Spart Rechenzeit
@@ -82,4 +82,8 @@ class Config:
     adam_betas: tuple[float] = (0.9, 0.99)
     max_grad_norm: float = 1.0
     ema_update_every: int = 1
+    #==Evaluation==
+    progen_model_name: str = "hugohrban/progen2-medium"  # "hugohrban/progen2-medium" oder "hugohrban/progen2-small"
+    progen_batch_size: int = 32
+    esm_scorer_model_name: str = "esm2_t6_8M_UR50D"
 

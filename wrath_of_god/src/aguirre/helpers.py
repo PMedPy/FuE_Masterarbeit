@@ -4,10 +4,14 @@
 import torch
 import pandas as pd
 from pathlib import Path
+from typing import Sequence
+import math
 from aguirre.config import Config, TRACKED_DIR
 from dataclasses import asdict
 import pandas as pd
 cfg = Config()
+
+AMINO_ACIDS = cfg.AS_alphabet
 
 # Baut Padding oder Validmask (tensor B,L) aus Längen (siehe Data_Coordinator)
 def masker(lengths: torch.Tensor, valid_mask: bool = False, pep_max_len: int = cfg.pep_max_len):
@@ -209,3 +213,30 @@ def load_standards(cfg_in: Config | None = None):
         raise ValueError("std enthaelt Werte <= 0 -- Division wuerde explodieren.")
 
     return mean, std
+
+def _shannons_H(sequence: Sequence[str]):
+    """Berechnet die Shannon-Entropie für eine ganzes Peptid
+    ### Args: 
+    Eine Reihe an Peptiden (Tupel, Listen usw)
+    ### Output: 
+    Eine Liste mit einem Entropiewert pro Sequenz"""
+    entropy = []
+    i = 0
+    for seq in sequence:
+        seq_entropy = 0
+        if not set(seq).issubset(set(AMINO_ACIDS)):
+            entropy.append(None)
+            print(
+                f"Ungültige Aminosäure in Sequenz mit Index {i}"
+            )
+        else:
+            for AS in AMINO_ACIDS:
+                count = seq.count(AS)
+                if count == 0:
+                    continue
+                p = count / len(seq)
+                log_p = math.log2(p)
+                seq_entropy += -log_p * p
+            entropy.append(seq_entropy)
+    #
+    return entropy

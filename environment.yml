@@ -23,13 +23,16 @@ dependencies:
   - python=3.11
 
   # ---------- Wissenschaftlicher Kern ----------
-  - numpy>=1.26,<3
-  - scipy
-  - pandas
-  - matplotlib
-  - seaborn
-  - pyarrow      # Parquet-Engine fuer pandas (to_parquet/read_parquet)
-  - pyyaml       # config.yaml im RunManager (yaml.safe_dump / safe_load)
+  - numpy>=1.26,<3        # steht schon
+  - scipy>=1.11,<2
+  - pandas>=2.2,<3        # <-- pandas 3 bricht Copy-on-Write-Semantik
+  - matplotlib>=3.8,<4
+  - seaborn>=0.13,<0.14   # 0.x: Minor ist hier der Breaking-Level
+  - pyarrow>=15           # nur Parquet-Engine, wird von pandas eingegrenzt
+  - pyyaml>=6,<7          # config.yaml im RunManager (yaml.safe_dump / safe_load)
+  - pytorch>=2.6,<3
+  - biopython>=1.83,<2
+
 
   # ---------- PyTorch ----------
   # Ueber conda-forge, NICHT ueber pip: das pip-Wheel bringt ein eigenes
@@ -68,18 +71,19 @@ dependencies:
   - pip
   - pip:
       
-
-
       # Protein-Sprachmodell: ESM-2 (esm2_t6_8M_UR50D)
       - fair-esm>=2.0.0
 
       # HF-Stack -- gebraucht fuer ProGen2-Perplexitaet in der Evaluation
-      - transformers>=4.45
-      - tokenizers
-      - safetensors
-      - huggingface_hub
-      - accelerate
-
+      - fair-esm>=2.0.0,<3        # faktisch eingefroren, Pin ist Formsache
+      - transformers>=4.45,<5     # steht schon, richtig so
+      - tokenizers                # KEIN Pin: transformers 4.x grenzt es ein
+      - safetensors               # dito
+      - huggingface_hub           # dito
+      - accelerate>=0.34,<2
+      - einops>=0.7,<1
+      - ema-pytorch>=0.4.2,<1
+      - wandb>=0.17,<1
       # Diffusions-Bausteine
       - einops
       - ema-pytorch>=0.4.2
