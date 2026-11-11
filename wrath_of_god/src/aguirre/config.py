@@ -82,8 +82,29 @@ class Config:
     adam_betas: tuple[float] = (0.9, 0.99)
     max_grad_norm: float = 1.0
     ema_update_every: int = 1
-    #==Evaluation==
-    progen_model_name: str = "hugohrban/progen2-medium"  # "hugohrban/progen2-medium" oder "hugohrban/progen2-small"
-    progen_batch_size: int = 32
-    esm_scorer_model_name: str = "esm2_t6_8M_UR50D"
+
+    #==Plots (Evaluation)==
+    # Kategoriale Palette: eine Farbe je Gruppe (train, generiert, gefiltert...).
+    # Zuweisung in fester Reihenfolge -- eine Gruppe behaelt ihre Farbe ueber
+    # alle Abbildungen hinweg, auch wenn in einer Abbildung eine Gruppe fehlt
+    # (z.B. die Referenz im Enrichment-Plot).
+    #
+    # Okabe-Ito, die uebliche barrierefreie Palette fuer Fachpublikationen.
+    # Geprueft: alle Nachbarpaare bleiben bei Deuteranopie, Protanopie und
+    # Tritanopie unterscheidbar, und die Helligkeiten liegen weit genug
+    # auseinander fuer den Schwarzweissdruck. Beim Aendern beides mitpruefen.
+    plot_farben: tuple[str, ...] = (
+        "#0072B2",   # Blau
+        "#E69F00",   # Orange
+        "#009E73",   # Gruen
+        "#D55E00",   # Zinnoberrot
+        "#56B4E9",   # Hellblau
+        "#CC79A7",   # Violett
+    )
+    # Sequenzielle Colormap fuer Heatmaps (Positionsprofile). Ein Farbton von
+    # hell nach dunkel -- kein Regenbogen, sonst liest man Spruenge in die
+    # Daten hinein, die nicht da sind. Alternativen: "cividis", "magma".
+    plot_cmap: str = "viridis"
+    plot_dpi: int = 200                # Aufloesung gespeicherter PNGs
+    plot_grid_alpha: float = 0.3       # Deckkraft der Hilfslinien
 

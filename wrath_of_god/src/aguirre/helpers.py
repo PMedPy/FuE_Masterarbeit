@@ -3,15 +3,14 @@
 #==Importe==
 import torch
 import pandas as pd
+import numpy as np
 from pathlib import Path
+from collections import Counter
 from typing import Sequence
-import math
 from aguirre.config import Config, TRACKED_DIR
 from dataclasses import asdict
 import pandas as pd
 cfg = Config()
-
-AMINO_ACIDS = cfg.AS_alphabet
 
 # Baut Padding oder Validmask (tensor B,L) aus Längen (siehe Data_Coordinator)
 def masker(lengths: torch.Tensor, valid_mask: bool = False, pep_max_len: int = cfg.pep_max_len):
@@ -214,29 +213,41 @@ def load_standards(cfg_in: Config | None = None):
 
     return mean, std
 
-def _shannons_H(sequence: Sequence[str]):
-    """Berechnet die Shannon-Entropie für eine ganzes Peptid
-    ### Args: 
-    Eine Reihe an Peptiden (Tupel, Listen usw)
-    ### Output: 
-    Eine Liste mit einem Entropiewert pro Sequenz"""
-    entropy = []
-    i = 0
-    for seq in sequence:
-        seq_entropy = 0
-        if not set(seq).issubset(set(AMINO_ACIDS)):
-            entropy.append(None)
-            print(
-                f"Ungültige Aminosäure in Sequenz mit Index {i}"
+
+# Shannon-Entropie der Aminosaeureverteilung je Sequenz (fuer AminoAcidEntropyScorer)
+def _shannons_H(sequences: Sequence[str], alphabet: str | None = None) -> np.ndarray:
+    """Shannon-Entropie der Aminosaeureverteilung je Sequenz, in bit.
+
+    H = -sum_a p_a * log2(p_a), p_a = Anteil der AS a IN DIESER Sequenz.
+    0.0 bei nur einer AS, maximal log2(k) bei k gleich haeufigen AS, wobei
+    k <= min(Sequenzlaenge, 20). Eine kurze Sequenz kann die 4.32 bit des
+    20er-Alphabets also gar nicht erreichen -- Entropie und Laenge sind
+    nicht unabhaengig, das gehoert bei der Interpretation dazu.
+
+    Args:
+        sequences: Sequenzen aus Grossbuchstaben des Alphabets.
+        alphabet: erlaubte Zeichen. None -> cfg.AS_alphabet. Fremdzeichen
+            sind ein Fehler, kein stiller 0-Beitrag.
+
+    Returns:
+        np.ndarray (len(sequences),) float64, gleiche Reihenfolge wie die Eingabe.
+
+    Raises:
+        ValueError: leere Sequenz oder Zeichen ausserhalb des Alphabets.
+    """
+    erlaubt = set(cfg.AS_alphabet if alphabet is None else alphabet)
+    H = np.empty(len(sequences), dtype=np.float64)
+
+    for i, seq in enumerate(sequences):
+        if not seq:
+            raise ValueError(f"Leere Sequenz an Position {i}.")
+        zaehler = Counter(seq)
+        fremd = sorted(set(zaehler) - erlaubt)
+        if fremd:
+            raise ValueError(
+                f"Sequenz {i} enthaelt Zeichen ausserhalb des Alphabets: {fremd}"
             )
-        else:
-            for AS in AMINO_ACIDS:
-                count = seq.count(AS)
-                if count == 0:
-                    continue
-                p = count / len(seq)
-                log_p = math.log2(p)
-                seq_entropy += -log_p * p
-            entropy.append(seq_entropy)
-    #
-    return entropy
+        p = np.fromiter(zaehler.values(), dtype=np.float64, count=len(zaehler)) / len(seq)
+        H[i] = -np.sum(p * np.log2(p))
+
+    return H
