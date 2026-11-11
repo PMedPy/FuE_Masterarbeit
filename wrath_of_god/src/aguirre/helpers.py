@@ -3,19 +3,25 @@
 #==Importe==
 import torch
 import pandas as pd
+import numpy as np
 from pathlib import Path
 from typing import Sequence
+from collections import Counter
 import math
 from aguirre.config import Config, TRACKED_DIR
 from dataclasses import asdict
-import pandas as pd
+
 cfg = Config()
 
 AMINO_ACIDS = cfg.AS_alphabet
 
 # Baut Padding oder Validmask (tensor B,L) aus Längen (siehe Data_Coordinator)
-def masker(lengths: torch.Tensor, valid_mask: bool = False, pep_max_len: int = cfg.pep_max_len):
+def masker(lengths: torch.Tensor, valid_mask: bool = False, pep_max_len: int | None = None):
     """(B,) Längen -> (B, L) bool, True = Padding, bei valid_mask = True ist False = Padding."""
+    # None statt cfg.pep_max_len als Default: ein Default-Argument wird beim
+    # IMPORT ausgewertet und bliebe an den damaligen Wert gebunden.
+    if pep_max_len is None:
+        pep_max_len = cfg.pep_max_len
 
     #Guardian
     too_long = lengths > pep_max_len # Bool (B,)
@@ -131,28 +137,42 @@ class Akkumulator:
             raise RuntimeError("Akku ist leer -- erst compute() aufrufen.")
         return torch.stack(self.akku).clone()
 
-    #==Architekturrelevante Felder==
-    _ARCH_KEYS = (
-        "esm_model_name", "embed_dim", "pep_max_len", "n_esm_layers",
-        "time_cond", "timesteps", "beta_schedule", "objective",
-    )
 
-    def _check_cfg_kompatibel(self, cfg_ckpt: dict) -> None:
-        """Bricht ab, wenn der Checkpoint zu einer anderen Architektur gehoert."""
-        jetzt = asdict(self.cfg)
-        abweichend = {
-            k: (cfg_ckpt.get(k), jetzt.get(k))
-            for k in self._ARCH_KEYS
-            if cfg_ckpt.get(k) != jetzt.get(k)
-        }
-        if abweichend:
-            raise ValueError(
-                "Checkpoint passt nicht zur aktuellen Config.\n"
-                + "\n".join(
-                    f"  {k}: Checkpoint={alt!r}, jetzt={neu!r}"
-                    for k, (alt, neu) in abweichend.items()
-                )
+#==Architekturrelevante Felder==
+# Lagen bis 2026-11-11 eingerueckt INNERHALB von Akkumulator und griffen dort
+# auf self.cfg zu, das ein Akkumulator nie setzt -- ein Aufruf waere mit
+# AttributeError gestorben. Jetzt als freie Funktion: sie gehoert zum
+# Checkpoint-Handling (Trainer/RunManager), nicht zur Mittelwertbildung.
+_ARCH_KEYS = (
+    "esm_model_name", "embed_dim", "pep_max_len", "n_esm_layers",
+    "time_cond", "timesteps", "beta_schedule", "objective",
+)
+
+
+def check_cfg_kompatibel(cfg_ckpt: dict, cfg_jetzt: Config | None = None) -> None:
+    """Bricht ab, wenn der Checkpoint zu einer anderen Architektur gehoert.
+
+    Args:
+        cfg_ckpt: Config-Dict aus dem Checkpoint.
+        cfg_jetzt: aktuelle Config. None -> Modul-Default.
+
+    Raises:
+        ValueError: sobald ein architekturrelevantes Feld abweicht.
+    """
+    jetzt = asdict(cfg if cfg_jetzt is None else cfg_jetzt)
+    abweichend = {
+        k: (cfg_ckpt.get(k), jetzt.get(k))
+        for k in _ARCH_KEYS
+        if cfg_ckpt.get(k) != jetzt.get(k)
+    }
+    if abweichend:
+        raise ValueError(
+            "Checkpoint passt nicht zur aktuellen Config.\n"
+            + "\n".join(
+                f"  {k}: Checkpoint={a!r}, jetzt={b!r}"
+                for k, (a, b) in abweichend.items()
             )
+        )
 
 
 # Pfad der Standards-CSV -> eine Stelle, an der der Name gebaut wird
@@ -214,29 +234,46 @@ def load_standards(cfg_in: Config | None = None):
 
     return mean, std
 
-def _shannons_H(sequence: Sequence[str]):
-    """Berechnet die Shannon-Entropie für eine ganzes Peptid
-    ### Args: 
-    Eine Reihe an Peptiden (Tupel, Listen usw)
-    ### Output: 
-    Eine Liste mit einem Entropiewert pro Sequenz"""
-    entropy = []
-    i = 0
-    for seq in sequence:
-        seq_entropy = 0
-        if not set(seq).issubset(set(AMINO_ACIDS)):
-            entropy.append(None)
-            print(
-                f"Ungültige Aminosäure in Sequenz mit Index {i}"
+# Shannon-Entropie der Aminosaeureverteilung je Sequenz (fuer AminoAcidEntropyScorer)
+def shannons_H(sequences: Sequence[str], alphabet: str | None = None) -> np.ndarray:
+    """Shannon-Entropie der Aminosaeureverteilung je Sequenz, in bit.
+
+    H = -sum_a p_a * log2(p_a), p_a = Anteil der AS a IN DIESER Sequenz.
+    0.0 bei nur einer AS, maximal log2(k) bei k gleich haeufigen AS, wobei
+    k <= min(Sequenzlaenge, 20). Eine kurze Sequenz kann die 4.32 bit des
+    20er-Alphabets also gar nicht erreichen -- Entropie und Laenge sind
+    nicht unabhaengig, das gehoert bei der Interpretation dazu.
+
+    Args:
+        sequences: Sequenzen aus Grossbuchstaben des Alphabets.
+        alphabet: erlaubte Zeichen. None -> cfg.AS_alphabet. Fremdzeichen
+            sind ein Fehler, kein stiller 0-Beitrag.
+
+    Returns:
+        np.ndarray (len(sequences),) float64, gleiche Reihenfolge wie die Eingabe.
+
+    Raises:
+        ValueError: leere Sequenz oder Zeichen ausserhalb des Alphabets.
+    """
+    erlaubt = set(cfg.AS_alphabet if alphabet is None else alphabet)
+    H = np.empty(len(sequences), dtype=np.float64)
+
+    for i, seq in enumerate(sequences):
+        if not seq:
+            raise ValueError(f"Leere Sequenz an Position {i}.")
+        zaehler = Counter(seq)
+        fremd = sorted(set(zaehler) - erlaubt)
+        if fremd:
+            raise ValueError(
+                f"Sequenz {i} enthaelt Zeichen ausserhalb des Alphabets: {fremd}"
             )
-        else:
-            for AS in AMINO_ACIDS:
-                count = seq.count(AS)
-                if count == 0:
-                    continue
-                p = count / len(seq)
-                log_p = math.log2(p)
-                seq_entropy += -log_p * p
-            entropy.append(seq_entropy)
-    #
-    return entropy
+        p = np.fromiter(zaehler.values(), dtype=np.float64, count=len(zaehler)) / len(seq)
+        H[i] = -np.sum(p * np.log2(p))
+
+    return H
+
+
+# Alter Name, damit bestehende Importe nicht brechen. Neuer Code nimmt
+# shannons_H -- die Funktion wird modulübergreifend benutzt, ist also
+# öffentlich und trägt keinen führenden Unterstrich mehr.
+_shannons_H = shannons_H

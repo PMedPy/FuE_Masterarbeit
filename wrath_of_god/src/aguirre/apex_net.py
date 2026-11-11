@@ -46,6 +46,7 @@ APEX_MAX_PEPTIDE_LEN = APEX_MAX_LEN - 2
 MIC_INACTIVE = 1.0e6                    # Saettigungswert: ReLU klemmt auf 0
 
 
+
 def encode_sequences(
     sequences: Sequence[str], max_len: int = APEX_MAX_LEN
 ) -> np.ndarray:
@@ -58,7 +59,7 @@ def encode_sequences(
     erlaubt = set(APEX_AMINO_ACIDS)
     for i, seq in enumerate(sequences):
         seq = seq.upper()
-        unbekannt = set(seq) - erlaubt
+        unbekannt = set(seq) - erlaubt #Aus jeder Sequenz wird ein Set aus einzigartigen AS erstellt und mit dem Erlaubten set verglichen
         if unbekannt:
             raise ValueError(
                 f"Sequenz {i}: Zeichen {sorted(unbekannt)} nicht im APEX-Vokabular. "
