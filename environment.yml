@@ -67,6 +67,13 @@ dependencies:
   #           https://github.com/soedinglab/MMseqs2/releases
   # Pruefen: mmseqs version
 
+  # APEX (MIC-Vorhersage) bewusst NICHT hier: kein pip/conda-Paket,
+  # sondern ein Git-Repo mit eigenen, teils aelteren Pin-Anforderungen.
+  # Separat klonen, damit es diese Umgebung nicht umbaut:
+  #   git clone https://gitlab.com/machine-biology-group-public/apex-pathogen
+  #   git -C apex-pathogen checkout <COMMIT-HASH>
+  # Pfad landet in cfg.apex_repo_path.
+
   # ---------- pip-only ----------
   - pip
   - pip:

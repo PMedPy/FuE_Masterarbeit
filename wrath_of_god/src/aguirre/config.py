@@ -85,5 +85,12 @@ class Config:
     #==Evaluation==
     progen_model_name: str = "hugohrban/progen2-medium"  # "hugohrban/progen2-medium" oder "hugohrban/progen2-small"
     progen_batch_size: int = 32
-    esm_scorer_model_name: str = "esm2_t6_8M_UR50D"
+    esm_scorer_model_name: str = "esm2_t33_650M_UR50D" # "esm2_t33_650M_UR50D" oder "esm2_t6_8M_UR50D"
+    esm_scorer_embed_dim: int = 1280 # 1280 oder 320
 
+    #==APEX==
+    apex_bundle_path: Path = DATA_DIR / "models" / "apex_state_dicts.pt"
+    apex_device: str = "cpu"        # GRU auf mps erst mit Aequivalenztest freigeben
+    apex_batch_size: int = 512
+    apex_max_len: int = 50
+    apex_inaktiv_schwelle: float = 64.0  
