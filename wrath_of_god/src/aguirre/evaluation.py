@@ -65,7 +65,7 @@ import pandas as pd
 from scipy import stats
 
 from aguirre.config import Config
-from aguirre.data import read_fasta
+from aguirre.data import read_fasta, write_fasta, run_mmseqs_search
 from aguirre.helpers import shannons_H
 
 if TYPE_CHECKING:  # nur fuer Typpruefer -- zur Laufzeit nicht importiert
@@ -238,8 +238,13 @@ class ProGen2Scorer(Scorer):
         Literatur vergleichbar.
 
     Das abschliessende "2" geht bewusst NICHT in den Mittelwert ein: so ist N
-    exakt die Sequenzlaenge. Diese Wahl ist Teil des Fingerabdrucks nicht --
-    sie ist fest verdrahtet; wer sie aendert, muss den Cache verwerfen.
+    exakt die Sequenzlaenge.
+
+    Batching: Sequenzen verschiedener Laenge werden RECHTS gepaddet. Eine
+    Attention-Maske braucht es dafuer nicht -- kausal plus Right-Padding heisst,
+    dass keine echte Position je ein Pad sieht. Die LOSS-Maske dagegen ist
+    Pflicht, sonst haengt die PPL einer Sequenz davon ab, welche anderen
+    zufaellig im selben Batch lagen.
     """
 
     name = "progen2"
@@ -247,9 +252,16 @@ class ProGen2Scorer(Scorer):
 
     @property
     def fingerprint(self) -> str:
+        # batch_size steht hier bewusst nicht drin: es aendert die Ausfuehrung,
+        # nicht das Ergebnis.
         return f"progen2__{self.cfg.progen_model_name.replace('/', '-')}"
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, batch_size: int | None = None) -> None:
+        """
+        Args:
+            config: liefert progen_model_name, progen_batch_size, device.
+            batch_size: ueberschreibt cfg.progen_batch_size, falls gesetzt.
+        """
         # Lazy: transformers/tokenizers/torch erst hier, nicht beim Modulimport.
         import torch
         from tokenizers import Tokenizer
@@ -257,7 +269,9 @@ class ProGen2Scorer(Scorer):
 
         self.cfg = config
         self.device = config.device
-        self.batch_size = config.progen_batch_size
+        self.batch_size = int(batch_size or config.progen_batch_size)
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size muss >= 1 sein, war {self.batch_size}.")
 
         # trust_remote_code: ProGen2 ist keine eingebaute transformers-
         # Architektur, die Modellklasse kommt als Datei aus dem Hub-Repo.
@@ -287,31 +301,135 @@ class ProGen2Scorer(Scorer):
                     f"'{AS}' aus cfg.AS_alphabet hat keine ID im ProGen2-Tokenizer."
                 )
 
+    # -- oeffentlich -------------------------------------------------------
+
     def score(self, sequences: Sequence[str]) -> pd.DataFrame:
+        return self._score_batch(sequences)
+
+    def _ids(self, seq: str) -> list[int]:
+        """Sequenz -> Token-IDs mit den Markern "1" und "2"."""
+        return self.tokenizer.encode("1" + seq + "2").ids
+
+    # -- gebatchte Fassung -------------------------------------------------
+
+    def _score_batch(self, sequences: Sequence[str]) -> pd.DataFrame:
+        """Mehrere Sequenzen je Forward, rechts gepaddet, mit Loss-Maske."""
+        import torch
+        import torch.nn.functional as F
+        from tqdm.auto import tqdm
+
+        n_seq = len(sequences)
+        if n_seq == 0:
+            return pd.DataFrame({self.columns[0]: []})
+
+        laengen = np.array([len(s) for s in sequences])
+        if (laengen == 0).any():
+            raise ValueError("Leere Sequenz -- Perplexitaet ist nicht definiert.")
+
+        # Nach Laenge sortieren: so landen aehnlich lange Sequenzen im selben
+        # Batch und das Padding bleibt klein. "stable" haelt die Reihenfolge
+        # gleich langer Sequenzen fest -- reproduzierbar statt beliebig.
+        ordnung = np.argsort(laengen, kind="stable")
+
+        # NaN als Startwert, damit eine Luecke beim Zuruecksortieren auffaellt.
+        ppl = np.full(n_seq, np.nan, dtype=float)
+
+        with torch.no_grad():
+            for start in tqdm(
+                range(0, n_seq, self.batch_size), desc="ProGen2", leave=False
+            ):
+                idx = ordnung[start : start + self.batch_size]
+                ids_liste = [self._ids(sequences[i]) for i in idx]
+                L_max = max(len(x) for x in ids_liste)
+
+                # Rechts mit pad_id auffuellen. Der Wert ist fuer das Ergebnis
+                # egal (die Loss-Maske schneidet ihn weg), aber pad_id ist das
+                # Token, das dafuer vorgesehen ist.
+                ids = torch.full(
+                    (len(idx), L_max), self.pad_id, dtype=torch.long, device=self.device
+                )
+                for r, x in enumerate(ids_liste):
+                    ids[r, : len(x)] = torch.tensor(
+                        x, dtype=torch.long, device=self.device
+                    )
+
+                logits = self.model(ids).logits          # (B, L_max, V)
+
+                # Shift: Logits an Position j sagen Token j+1 vorher.
+                pred = logits[:, :-1, :]                 # (B, L_max-1, V)
+                ziel = ids[:, 1:]                        # (B, L_max-1)
+
+                # reduction="none" ist der Kern: model(..., labels=...) oder
+                # ein gemitteltes cross_entropy gaebe EINEN Skalar ueber den
+                # ganzen Batch -- wir brauchen eine Zahl pro Sequenz.
+                verlust = F.cross_entropy(
+                    pred.reshape(-1, pred.size(-1)),
+                    ziel.reshape(-1),
+                    reduction="none",
+                ).view(ziel.shape)                       # (B, L_max-1)
+
+                # Maske: ziel-Index j gehoert zu Token j+1, gueltig sind
+                # j < n_residuen. Das schliesst in einem Ausdruck sowohl das
+                # abschliessende "2" (j == n) als auch das Padding (j > n) aus.
+                n_res = torch.as_tensor(
+                    laengen[idx], dtype=torch.long, device=self.device
+                )
+                spalten = torch.arange(L_max - 1, device=self.device)
+                maske = spalten.unsqueeze(0) < n_res.unsqueeze(1)      # (B, L_max-1)
+
+                if not torch.equal(maske.sum(1), n_res):
+                    raise AssertionError(
+                        "Maske deckt nicht genau die Residuen ab -- "
+                        f"{maske.sum(1).tolist()} statt {n_res.tolist()}."
+                    )
+
+                # Gewichteter Mittelwert je Zeile: Nenner ist die ECHTE Laenge,
+                # nicht die Tensorbreite.
+                mittel = (verlust * maske).sum(1) / maske.sum(1)
+
+                # mps kennt kein float64 -- erst auf die CPU, dann exp.
+                ppl[idx] = torch.exp(mittel.detach().cpu().double()).numpy()
+
+        if np.isnan(ppl).any():
+            raise AssertionError(
+                f"{int(np.isnan(ppl).sum())} Sequenzen ohne Ergebnis -- "
+                "beim Zuruecksortieren ist etwas verrutscht."
+            )
+        return pd.DataFrame({self.columns[0]: ppl})
+
+    # -- Referenzfassung ---------------------------------------------------
+
+    def _score_schleife(self, sequences: Sequence[str]) -> pd.DataFrame:
+        """Eine Sequenz nach der anderen, ohne Padding. Die Referenz.
+
+        Bleibt im Code, damit _score_batch dagegen getestet werden kann:
+            a = sc._score_schleife(seqs)["ppl_progen2"].to_numpy()
+            b = sc._score_batch(seqs)["ppl_progen2"].to_numpy()
+            assert np.allclose(a, b, rtol=1e-4)
+        """
         import torch
         import torch.nn.functional as F
         from tqdm.auto import tqdm
 
         ppl_akk: list[float] = []
         with torch.no_grad():
-            for seq in tqdm(sequences, desc="ProGen2", leave=False):
+            for seq in tqdm(sequences, desc="ProGen2 (Schleife)", leave=False):
                 ids = torch.tensor(
-                    self.tokenizer.encode("1" + seq + "2").ids,
-                    dtype=torch.long,
-                    device=self.device,
+                    self._ids(seq), dtype=torch.long, device=self.device
                 ).unsqueeze(0)                       # (1, L+2)
 
-                logits = self.model(ids).logits      # (1, L+2, 30)
+                logits = self.model(ids).logits      # (1, L+2, V)
 
                 # Zweimal abschneiden, aus zwei verschiedenen Gruenden:
                 #   :-1  Shift -- Logits an Position i sagen Token i+1 vorher
                 #   :-1  das EOS "2" soll nicht in den Mittelwert
-                pred = logits[0, :-2, :]             # (L, 30)
-                target = ids[0, 1:-1]                # (L,)
-                assert pred.shape[0] == target.shape[0] == len(seq)
+                pred = logits[0, :-2, :]             # (L, V)
+                ziel = ids[0, 1:-1]                  # (L,)
+                if pred.shape[0] != len(seq) or ziel.shape[0] != len(seq):
+                    raise AssertionError("Shift passt nicht zur Sequenzlaenge.")
 
-                ce = F.cross_entropy(pred, target)   # rohe Logits, nats
-                ppl_akk.append(float(torch.exp(ce)))
+                ce = F.cross_entropy(pred, ziel)     # rohe Logits, nats
+                ppl_akk.append(float(torch.exp(ce.detach().cpu().double())))
 
         return pd.DataFrame({self.columns[0]: ppl_akk})
 
@@ -327,7 +445,10 @@ class ESMPseudoPerplexityScorer(Scorer):
     nicht. PPPL ist damit nicht mit ppl_progen2 vergleichbar -- zwei Spalten,
     zwei Skalen.
 
-    Kosten: N Forward-Passes pro Sequenz (eine Maske je Position).
+    Kosten: N Forward-Passes pro Sequenz (eine Maske je Position). Die N
+    maskierten Varianten EINER Sequenz sind aber alle exakt gleich lang und
+    lassen sich deshalb ohne Padding zu einem Batch (N, L+2) stapeln --
+    "intra-Sequenz-Batching". Aus N Forwards wird einer.
 
     WICHTIG -- Zirkularitaet: Der Generator dekodiert ueber den lm_head von
     ESM-2. Bewertet man mit demselben Modell, misst man zum Teil den eigenen
@@ -343,14 +464,29 @@ class ESMPseudoPerplexityScorer(Scorer):
 
     @property
     def fingerprint(self) -> str:
+        # max_masken steht hier BEWUSST nicht drin: es stueckelt nur den
+        # Batch, jede Zeile bleibt unabhaengig, das Ergebnis aendert sich
+        # nicht. In den Fingerabdruck gehoert nur, was die Zahl veraendert.
         return f"esm2_pppl__{self.cfg.esm_scorer_model_name}"
 
-    def __init__(self, config: Config) -> None:
-        # Lazy: fair-esm und torch erst hier.
+    def __init__(self, config: Config, max_masken: int = 256) -> None:
+        """
+        Args:
+            config: liefert esm_scorer_model_name, esm_scorer_embed_dim, device.
+            max_masken: so viele maskierte Kopien gehen hoechstens gemeinsam
+                durchs Modell. Der Batch waechst quadratisch (N Kopien à N+2
+                Token), bei 50 Residuen sind das 2.600 Token -- nichts. Bei
+                einem 365er-Kontrollprotein waeren es 134.000, und mit dem
+                650M-Modell wird das eng. Rein eine Speichergrenze.
+        """
+        # Lazy: fair-esm und torch erst hier, nicht beim Modulimport.
         import esm
 
         self.cfg = config
         self.device = config.device
+        self.max_masken = int(max_masken)
+        if self.max_masken < 1:
+            raise ValueError(f"max_masken muss >= 1 sein, war {max_masken}.")
 
         mode = config.esm_scorer_model_name
         if mode not in self.ERLAUBTE_MODELLE:
@@ -380,39 +516,122 @@ class ESMPseudoPerplexityScorer(Scorer):
         self.cls_idx = alphabet.cls_idx
         self.eos_idx = alphabet.eos_idx
 
+    # -- oeffentlich -------------------------------------------------------
+
     def score(self, sequences: Sequence[str]) -> pd.DataFrame:
+        return self._score_batch(sequences)
+
+    # -- gemeinsame Vorarbeit ---------------------------------------------
+
+    def _tokenisieren(self, seq: str):
+        """(1, N+2)-Tokens auf dem Device, mit Shape-Pruefung."""
+        if not seq:
+            raise ValueError("Leere Sequenz -- PPPL ist nicht definiert.")
+        _, _, tokens = self.batch_converter([("seq", seq)])
+        # Tensor.to() ist NICHT in-place -- Rueckgabe zuweisen.
+        tokens = tokens.to(self.device)
+        if tuple(tokens.shape) != (1, len(seq) + 2):
+            raise ValueError(
+                f"Unerwartete Token-Shape {tuple(tokens.shape)}, "
+                f"erwartet {(1, len(seq) + 2)}."
+            )
+        return tokens
+
+    # -- gebatchte Fassung -------------------------------------------------
+
+    def _score_batch(self, sequences: Sequence[str]) -> pd.DataFrame:
+        """Intra-Sequenz-Batching: die N Maskierungen einer Sequenz auf einmal.
+
+        Alle N Kopien sind exakt gleich lang -- kein Padding, keine
+        Attention-Maske, keine Loss-Maske. Die ganze Fehlerquelle des
+        Batchings ueber verschiedene Sequenzen entfaellt hier.
+        """
         import torch
         from tqdm.auto import tqdm
 
         pppl_akk: list[float] = []
         with torch.no_grad():
             for seq in tqdm(sequences, desc="ESM-PPPL", leave=False):
-                _, _, tokens_orig = self.batch_converter([("seq", seq)])
-                # Tensor.to() ist NICHT in-place -- Rueckgabe zuweisen.
-                tokens_orig = tokens_orig.to(self.device)
-                if tuple(tokens_orig.shape) != (1, len(seq) + 2):
-                    raise ValueError(
-                        f"Unerwartete Token-Shape {tuple(tokens_orig.shape)}, "
-                        f"erwartet {(1, len(seq) + 2)}."
-                    )
+                tokens_orig = self._tokenisieren(seq)
+                N = len(seq)
 
+                # Zielwerte lesen, BEVOR maskiert wird. clone(), sonst zeigt
+                # der Slice in denselben Speicher, den wir gleich ueberschreiben.
+                echte_ids = tokens_orig[0, 1 : N + 1].clone()          # (N,)
+
+                teile = []
+                for start in range(0, N, self.max_masken):
+                    # Positionen dieses Stuecks; 0-basiert in der Sequenz.
+                    pos = torch.arange(
+                        start, min(start + self.max_masken, N), device=self.device
+                    )                                                   # (M,)
+                    m = int(pos.numel())
+                    zeilen = torch.arange(m, device=self.device)        # (M,)
+
+                    # repeat, NICHT expand: expand teilt Speicher, das
+                    # Maskieren wuerde alle Zeilen gleichzeitig treffen und
+                    # nach einem Schritt saesse die Maske ueberall.
+                    tokens = tokens_orig.repeat(m, 1)                   # (M, N+2)
+
+                    # Residuum i liegt hinter dem BOS auf Token-Index i+1.
+                    # Zwei Indexvektoren gleicher Laenge werden PAARWEISE
+                    # abgebildet (advanced indexing), nicht als Kreuzprodukt:
+                    # Zeile j bekommt genau Position pos[j] maskiert.
+                    tokens[zeilen, pos + 1] = self.mask_idx
+
+                    logits = self.model(tokens)["logits"]               # (M, N+2, 33)
+
+                    # Dieselbe Diagonale wieder herauslesen.
+                    diag = logits[zeilen, pos + 1]                      # (M, 33)
+                    # Softmax ueber ALLE 33 Token, nicht auf die 20 kanonischen
+                    # einschraenken -- sonst ist es eine andere Groesse.
+                    lp = torch.log_softmax(diag, dim=-1)[zeilen, echte_ids[pos]]
+                    if tuple(lp.shape) != (m,):
+                        raise AssertionError(
+                            f"Diagonale ergab {tuple(lp.shape)}, erwartet {(m,)} -- "
+                            "vermutlich Kreuzprodukt statt paarweiser Indizierung."
+                        )
+                    # Auf CPU in float64 sammeln: mps kennt kein float64, und
+                    # der Mittelwert soll nicht in float32 entstehen.
+                    teile.append(lp.detach().cpu().double())
+
+                log_ps = torch.cat(teile)                               # (N,)
+                if log_ps.numel() != N:
+                    raise AssertionError(
+                        f"{log_ps.numel()} Positionen fuer Laenge {N}."
+                    )
+                # Erst mitteln, dann exponenzieren -- genau einmal.
+                pppl_akk.append(float(torch.exp(-log_ps.mean())))
+
+        return pd.DataFrame({self.columns[0]: pppl_akk})
+
+    # -- Referenzfassung ---------------------------------------------------
+
+    def _score_schleife(self, sequences: Sequence[str]) -> pd.DataFrame:
+        """Eine Maske nach der anderen. Langsam, aber die Referenz.
+
+        Bleibt im Code, damit _score_batch dagegen getestet werden kann:
+            a = sc._score_schleife(seqs)["pppl_esm2"].to_numpy()
+            b = sc._score_batch(seqs)["pppl_esm2"].to_numpy()
+            assert np.allclose(a, b, rtol=1e-5)
+        """
+        import torch
+        from tqdm.auto import tqdm
+
+        pppl_akk: list[float] = []
+        with torch.no_grad():
+            for seq in tqdm(sequences, desc="ESM-PPPL (Schleife)", leave=False):
+                tokens_orig = self._tokenisieren(seq)
                 log_ps: list[float] = []
                 for i in range(len(seq)):
-                    # Residuum i liegt hinter dem BOS auf Token-Index i+1.
-                    tokens = tokens_orig.clone()        # ohne clone frisst
-                    echte_id = tokens[0, i + 1].item()  # sich die Maske durch
-                    tokens[0, i + 1] = self.mask_idx    # die ganze Sequenz
-
-                    logits = self.model(tokens)["logits"]   # (1, N+2, 33)
+                    tokens = tokens_orig.clone()
+                    echte_id = tokens[0, i + 1].item()
+                    tokens[0, i + 1] = self.mask_idx
+                    logits = self.model(tokens)["logits"]
                     lp = torch.log_softmax(logits[0, i + 1], dim=-1)[echte_id]
                     log_ps.append(float(lp))
-
                 if len(log_ps) != len(seq):
                     raise AssertionError("Positionszahl weicht von der Laenge ab.")
-
-                # Erst mitteln, dann exponenzieren -- genau einmal. Die
-                # Umkehrung waere ein arithmetisches Mittel von Perplexitaeten
-                # und damit (Jensen) systematisch zu gross.
                 pppl_akk.append(math.exp(-sum(log_ps) / len(log_ps)))
 
         return pd.DataFrame({self.columns[0]: pppl_akk})
@@ -521,6 +740,23 @@ class APEXScorer(Scorer):
         for j, stamm in enumerate(self.backend.strains):
             data[f"mic_apex__{stamm}"] = mic[:, j]
         return pd.DataFrame(data, columns=self.columns)
+
+class KnownAMPSimilarityScorer(Scorer):
+
+    name = "ident_bekannt"
+    columns = ["max_ident_bekannt"]
+
+    def __init__(self):
+        super().__init__()
+
+
+    @property
+    def fingerprint(self):
+        return f"ident_bekannt__{pfad.stem}__{pfad.stat().st_size}"
+
+    def score(self, sequences):
+        write_fasta(list(sequences), path= TMP_DIR / "query.fasta")
+        
 
 
 # ---------------------------------------------------------------------------

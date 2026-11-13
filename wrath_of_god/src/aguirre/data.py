@@ -27,6 +27,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import subprocess
+import tempfile
+
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 config = Config()
@@ -60,9 +62,11 @@ def read_fasta(path) -> tuple[list[str], list[str]]:
     return ids, seqs
 
 def run_mmseqs_search(
-    fasta_path: str | Path,
+    query_fasta_path: str | Path,
     out_path: str | Path,
     tmp_dir: str | Path,
+    target_fasta_path: str | Path | None = None,
+    *,
     sensitivity: float = 7.5,
     evalue: float = 10000,
     max_seqs: int = 10000,
@@ -73,51 +77,66 @@ def run_mmseqs_search(
     cov_mode: int = 5,
     extra_args: list[str] | None = None,
 ) -> Path:
-    """All-gegen-alle-Suche mit MMseqs2. Gibt den Pfad zur .m8-Datei zurueck."""
+    """MMseqs2-Suche Query gegen Target. Gibt den Pfad zur .m8-Datei zurueck.
+
+    target_fasta_path = None -> Suche gegen sich selbst (All-gegen-All, fuers
+    Clustering). Dann enthaelt die .m8 auch Selbsttreffer (query == target,
+    fident 1.0); wer Paare auswertet, muss die herausfiltern.
+
+    Ausgabespalten (--format-output, fest):
+        query, target, fident, alnlen, qlen, tlen, qcov, tcov, evalue, bits
+    fident ist ein Bruch in [0, 1], KEINE Prozentzahl, und bezieht sich auf
+    den ausgerichteten Bereich -- nicht auf die volle Sequenzlaenge.
+    """
     #==Input in Paths ändern==
-    fasta_path = Path(fasta_path)
+    query_fasta_path = Path(query_fasta_path)
     out_path = Path(out_path) # Pfad muss auf eine Datei zeigen. z.B DATA_DIR / "test_hits.m8"
     tmp_dir = Path(tmp_dir)
 
     tmp_dir.mkdir(parents = True, exist_ok = True)
     out_path.parent.mkdir(parents= True, exist_ok= True)
 
+    if target_fasta_path is None:
+        target_fasta_path = query_fasta_path
+    else:
+        target_fasta_path = Path(target_fasta_path)
+
     #==Command==
     # mmseqs easy-search  <fasta>  <fasta>  <out.m8>  <tmp_dir>  -s 7.5  -e 10000  --max-seqs 2000
-    
-    cmd = [
-        "mmseqs", 
-        "easy-search", 
-        str(fasta_path), 
-        str(fasta_path), 
-        str(out_path), 
-        str(tmp_dir), 
-        "-s",
-        str(sensitivity),
-        "-e",
-        str(evalue),
-        "--max-seqs",
-        str(max_seqs),
-        "-k",
-        str(kmer_len),
-        "--spaced-kmer-mode",
-        str(spaced_kmer_mode),
-        "--mask", 
-        str(mask),
-        "--cov-mode",
-        str(cov_mode),
-        "-c",
-        str(coverage_rate),
-        "--format-output",
-        "query,target,fident,alnlen,qlen,tlen,qcov,tcov,evalue,bits",]
-    
-    if extra_args:
-        cmd += extra_args
-    
-    #==run & return==
-    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if res.returncode != 0:
-        raise RuntimeError(f"mmseqs fehlgeschlagen:\n{res.stdout}\n{res.stderr}")
+    with tempfile.TemporaryDirectory(dir= tmp_dir) as process_dir:
+        cmd = [
+            "mmseqs", 
+            "easy-search", 
+            str(query_fasta_path), 
+            str(target_fasta_path), 
+            str(out_path), 
+            str(process_dir), 
+            "-s",
+            str(sensitivity),
+            "-e",
+            str(evalue),
+            "--max-seqs",
+            str(max_seqs),
+            "-k",
+            str(kmer_len),
+            "--spaced-kmer-mode",
+            str(spaced_kmer_mode),
+            "--mask", 
+            str(mask),
+            "--cov-mode",
+            str(cov_mode),
+            "-c",
+            str(coverage_rate),
+            "--format-output",
+            "query,target,fident,alnlen,qlen,tlen,qcov,tcov,evalue,bits",]
+        
+        if extra_args:
+            cmd += extra_args
+        
+        #==run & return==
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"mmseqs fehlgeschlagen:\n{res.stdout}\n{res.stderr}")
     return out_path
 
 class ClusterSplitter():
