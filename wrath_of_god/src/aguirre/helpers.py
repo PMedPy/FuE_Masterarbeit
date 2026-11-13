@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Sequence
 from collections import Counter
 import math
-from aguirre.config import Config, TRACKED_DIR
+from aguirre.config import Config, TRACKED_DIR, _yaml_safe
 from dataclasses import asdict
 
 cfg = Config()
@@ -39,18 +39,11 @@ def masker(lengths: torch.Tensor, valid_mask: bool = False, pep_max_len: int | N
     else: 
         return padding_mask
 
-# yaml-Saver, um config yaml-tauglich zu machen.
+# _yaml_safe wohnt jetzt in config.py (Config.to_yaml braucht es selbst, und
+# helpers importiert ohnehin aus config -- andersherum waere es ein
+# Zirkelimport). Hier nur weitergereicht, damit bestehende Importe wie
+# "from aguirre.helpers import _yaml_safe" in trainer.py weiter funktionieren.
 
-def _yaml_safe(obj):
-    """Rekursiv yaml-taugliche Typen erzwingen: Path -> str, Tupel -> Liste."""
-    if isinstance(obj, dict):
-        return {k: _yaml_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_yaml_safe(v) for v in obj]
-    if isinstance(obj, Path):
-        return str(obj)
-    return obj
-    
 # Akkumulatoren
 class Akkumulator:
     """Mittelwert ueber viele Batches, ohne Zwischenmittelung.

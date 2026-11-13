@@ -58,14 +58,15 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Iterable, Mapping, Sequence
+import tempfile
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-from aguirre.config import Config
-from aguirre.data import read_fasta, write_fasta, run_mmseqs_search
+from aguirre.config import Config, TMP_DIR
+from aguirre.data import read_fasta, write_fasta, run_mmseqs_search, M8_SPALTEN
 from aguirre.helpers import shannons_H
 
 if TYPE_CHECKING:  # nur fuer Typpruefer -- zur Laufzeit nicht importiert
@@ -742,20 +743,102 @@ class APEXScorer(Scorer):
         return pd.DataFrame(data, columns=self.columns)
 
 class KnownAMPSimilarityScorer(Scorer):
+    """Maximale Sequenzidentitaet zu einer Referenzmenge (Torres' Kriterium 2).
+
+    Beantwortet: "Wie aehnlich ist diese Sequenz der naechstliegenden im
+    Referenzsatz?" Mit dem Trainingssatz als Referenz ist das ein
+    Memorierungstest -- der Fehlermodus, den weder Perplexitaet noch
+    Entropie noch APEX sehen: ein Modell, das Trainingsdaten reproduziert,
+    gewinnt in allen dreien.
+
+    Spalte max_ident_bekannt in [0, 1]. KEIN Treffer ergibt 0.0, nicht NaN:
+    "nichts gefunden" heisst maximal unaehnlich, also bestanden.
+
+    fident bezieht sich auf den ausgerichteten Bereich; das Coverage-Gate
+    (-c 0.5) in run_mmseqs_search schneidet Fetzen-Treffer ab.
+    """
 
     name = "ident_bekannt"
     columns = ["max_ident_bekannt"]
 
-    def __init__(self):
-        super().__init__()
+    def __init__(
+        self,
+        referenz: Path | str,
+        cov_mode: int = 2,
+        coverage: float = 0.8,
+        evalue: float = 1e-3,
+    ) -> None:
+        self.referenz = Path(referenz)
+        if not self.referenz.is_file():
+            raise FileNotFoundError(
+                f"Referenz-FASTA nicht gefunden: {self.referenz}. "
+                "Einmalig mit write_fasta(...) aus der Trainings-CSV erzeugen."
+            )
+        self.cov_mode = int(cov_mode)
+        self.coverage = float(coverage)
+        self.evalue = float(evalue)
 
+    @classmethod
+    def from_config(cls, cfg_in: Config) -> "KnownAMPSimilarityScorer":
+        return cls(
+            referenz=cfg_in.amp_referenz_fasta,
+            cov_mode=cfg_in.similarity_cov_mode,
+            coverage=cfg_in.similarity_coverage,
+            evalue=cfg_in.similarity_evalue,
+        )
 
     @property
-    def fingerprint(self):
-        return f"ident_bekannt__{pfad.stem}__{pfad.stat().st_size}"
+    def fingerprint(self) -> str:
+        # Referenzdatenbank UND Suchparameter: beide veraendern die Zahlen.
+        return (
+            f"ident_bekannt__{self.referenz.stem}__{self.referenz.stat().st_size}"
+            f"__cm{self.cov_mode}__c{self.coverage:g}__e{self.evalue:g}"
+        )
+    
+    def score(self, sequences: Sequence[str]) -> pd.DataFrame:
+        """Gemessen wird fident * qcov: der Anteil der QUERY, der identisch zu etwas
+        Bekanntem ist. fident allein ist die Identitaet im ausgerichteten Bereich
+        und saettigt -- bei cov_mode 5 und -e 10000 bekam jede Sequenz 1.0 ueber
+        ein zufaelliges Dreierfenster. Deshalb cov_mode 2 (Query-Ueberdeckung),
+        -c 0.8 und -e 1e-3."""
 
-    def score(self, sequences):
-        write_fasta(list(sequences), path= TMP_DIR / "query.fasta")
+        n = len(sequences)
+        if n == 0:
+            return pd.DataFrame({self.columns[0]: []})
+
+        with tempfile.TemporaryDirectory(dir=TMP_DIR) as tmp:
+            tmp = Path(tmp)
+            query = write_fasta(list(sequences), tmp / "query.fasta")
+            out = run_mmseqs_search(
+                query_fasta_path=query,
+                out_path=tmp / "hits.m8",
+                tmp_dir=tmp,
+                target_fasta_path=self.referenz,
+                cov_mode= self.cov_mode,            # Ueberdeckung der QUERY -- "wie viel von MEINEM Peptid"
+                coverage_rate= self.coverage,     # mindestens 80 % der Query muss aligniert sein
+                evalue= self.evalue,           # nicht 10000: sonst Hunderte Zufallstreffer je Query
+                )
+            # Leere .m8 = keine einzige Sequenz aehnelt der Referenz.
+            # Das ist das BESTE Ergebnis, kein Fehler.
+            if Path(out).stat().st_size == 0:
+                return pd.DataFrame({self.columns[0]: np.zeros(n)})
+
+            hits = pd.read_csv(out, sep="\t", names=M8_SPALTEN)
+
+        # Je Query der aehnlichste Treffer.
+        hits["ident_query"] = hits["fident"] * hits["qcov"]
+        max_ident = hits.groupby("query")["ident_query"].max()
+
+        # write_fasta vergibt ">AMP_<i>" mit i = Position in der Eingabe.
+        # Ueber diese Zahl zurueckordnen -- NICHT positionell: der groupby
+        # sortiert lexikografisch (AMP_1, AMP_10, AMP_100, AMP_11, ...), und
+        # Sequenzen ohne Treffer fehlen in der .m8 ganz.
+        pos = max_ident.index.to_series().str.split("_").str[-1].astype(int)
+        werte = pd.Series(max_ident.to_numpy(), index=pos.to_numpy())
+        werte = werte.reindex(range(n), fill_value=0.0)
+
+        return pd.DataFrame({self.columns[0]: werte.to_numpy()})
+
         
 
 
@@ -945,6 +1028,39 @@ class LengthFilter(Filter):
         )
         return gefiltert
 
+class SimilarityFilter(Filter):
+    """Verwirft Sequenzen, die bekannten AMPs zu aehnlich sind.
+
+    Torres' Kriterium (2): Sequenzidentitaet > 0.60 zu einem bekannten AMP
+    schliesst aus. Mit dem Trainingssatz als Referenz ist das der
+    Memorierungsfilter.
+    """
+
+    def __init__(self, max_ident: float = 0.60,
+                 column: str = "max_ident_bekannt") -> None:
+        if not 0.0 <= max_ident <= 1.0:
+            raise ValueError(f"max_ident muss in [0, 1] liegen, war {max_ident}.")
+        self.max_ident = float(max_ident)
+        self.column = column
+
+    @classmethod
+    def from_config(cls, cfg_in: Config) -> "SimilarityFilter":
+        return cls(max_ident=cfg_in.similarity_max_ident)
+
+    def apply(self, seqset: SequenceSet) -> SequenceSet:
+        if self.column not in seqset.data.columns:
+            raise KeyError(
+                f"Spalte '{self.column}' fehlt in Set '{seqset.name}'. "
+                "Erst den KnownAMPSimilarityScorer laufen lassen."
+            )
+        # Hier gibt es kein NaN: "kein Treffer" ist 0.0. Ein NaN waere ein Bug.
+        mask = seqset.data[self.column] <= self.max_ident
+        gefiltert = seqset.subset(mask, name=f"{seqset.name}_ident{self.max_ident:g}")
+        print(
+            f"[SimilarityFilter] {len(gefiltert.data)} von {len(seqset.data)} "
+            f"behalten ({len(gefiltert.data) / max(len(seqset.data), 1):.1%})."
+        )
+        return gefiltert
 
 class MICFilter(Filter):
     """Behaelt Sequenzen mit vorhergesagter MIC <= max_mic (Spalte "mic_apex").
@@ -990,6 +1106,127 @@ class MICFilter(Filter):
             f"behalten ({len(gefiltert.data) / max(len(seqset.data), 1):.1%})."
         )
         return gefiltert
+
+class DiversityFilter(Filter):
+    """Waehlt eine moeglichst grosse, untereinander unaehnliche Teilmenge.
+
+    Torres' Kriterium (3): paarweise Identitaet > 0.40 schliesst eines der
+    beiden Peptide aus, und zwar das mit der schlechteren MIC.
+
+    Graphenproblem: Knoten = Sequenzen, Kante = "zu aehnlich". Gesucht ist
+    eine grosse unabhaengige Menge -- NP-schwer, also gierig geloest. Die
+    Sortierung nach sort_column macht das Ergebnis deterministisch UND setzt
+    Torres' Regel um: das potentere Peptid kommt zuerst dran und gewinnt
+    jeden Konflikt.
+
+    NACH dem MICFilter anwenden. Die All-gegen-All-Suche ist quadratisch;
+    auf 50.000 Kandidaten waere sie unbezahlbar, auf den paar hundert
+    Ueberlebenden ist sie Sekunden.
+    """
+
+    def __init__(
+        self,
+        max_ident: float = 0.40,
+        sort_column: str | None = "mic_apex",
+        cov_mode: int = 2,
+        coverage: float = 0.8,
+        evalue: float = 1e-3,
+    ) -> None:
+        if not 0.0 <= max_ident <= 1.0:
+            raise ValueError(f"max_ident muss in [0, 1] liegen, war {max_ident}.")
+        self.max_ident = float(max_ident)
+        self.sort_column = sort_column
+        self.cov_mode = int(cov_mode)
+        self.coverage = float(coverage)
+        self.evalue = float(evalue)
+
+    @classmethod
+    def from_config(cls, cfg_in: Config) -> "DiversityFilter":
+        return cls(
+            max_ident=cfg_in.diversity_max_ident,
+            cov_mode=cfg_in.similarity_cov_mode,
+            coverage=cfg_in.similarity_coverage,
+            evalue=cfg_in.similarity_evalue,
+        )
+
+    def apply(self, seqset: SequenceSet) -> SequenceSet:
+        n = len(seqset.data)
+        name = f"{seqset.name}_div{self.max_ident:g}"
+        if n <= 1:
+            return seqset.subset(pd.Series(np.ones(n, dtype=bool)), name=name)
+
+        nachbarn = self._nachbarschaft(seqset.data["sequence"].tolist())
+
+        # Reihenfolge = Rangfolge der Guete. NaN ans Ende, damit nicht
+        # bewertbare Sequenzen jeden Konflikt verlieren.
+        if self.sort_column and self.sort_column in seqset.data.columns:
+            werte = pd.to_numeric(
+                seqset.data[self.sort_column], errors="coerce"
+            ).to_numpy(dtype=float)
+            reihenfolge = np.argsort(np.where(np.isnan(werte), np.inf, werte),
+                                     kind="stable")
+        else:
+            print(
+                f"[DiversityFilter] Spalte '{self.sort_column}' fehlt -- "
+                "Eingabereihenfolge entscheidet die Konflikte."
+            )
+            reihenfolge = np.arange(n)
+
+        # Gierige unabhaengige Menge: besten Knoten nehmen, Nachbarn sperren.
+        behalten: list[int] = []
+        gesperrt: set[int] = set()
+        for i in reihenfolge:
+            i = int(i)
+            if i in gesperrt:
+                continue
+            behalten.append(i)
+            gesperrt |= nachbarn.get(i, set())
+
+        maske = np.zeros(n, dtype=bool)
+        maske[behalten] = True
+        gefiltert = seqset.subset(pd.Series(maske), name=name)
+        print(
+            f"[DiversityFilter] {len(gefiltert.data)} von {n} behalten "
+            f"({len(gefiltert.data) / n:.1%}), Schwelle {self.max_ident:g}."
+        )
+        return gefiltert
+
+    def _nachbarschaft(self, sequences: list[str]) -> dict[int, set[int]]:
+        """All-gegen-All -> {Index: Menge der zu aehnlichen Indizes}.
+
+        Duenn besetzt: mmseqs meldet nur Treffer, und wir behalten davon nur
+        die ueber der Schwelle. Eine n x n-Matrix braucht es nie.
+        """
+        with tempfile.TemporaryDirectory(dir=TMP_DIR) as tmp:
+            tmp = Path(tmp)
+            fa = write_fasta(sequences, tmp / "kandidaten.fasta")
+            out = run_mmseqs_search(                 # target=None -> gegen sich selbst
+                query_fasta_path=fa,
+                out_path=tmp / "all.m8",
+                tmp_dir=tmp,
+                cov_mode=self.cov_mode,
+                coverage_rate=self.coverage,
+                evalue=self.evalue,
+            )
+            if Path(out).stat().st_size == 0:
+                return {}
+            hits = pd.read_csv(out, sep="\t", names=M8_SPALTEN)
+
+        # Dieselbe Identitaetsdefinition wie im KnownAMPSimilarityScorer:
+        # Anteil der Query, der identisch ist. fident allein saettigt.
+        hits = hits.assign(ident=hits["fident"] * hits["qcov"])
+        hits = hits[hits["ident"] > self.max_ident]
+
+        a = hits["query"].str.split("_").str[-1].astype(int).to_numpy()
+        b = hits["target"].str.split("_").str[-1].astype(int).to_numpy()
+
+        nachbarn: dict[int, set[int]] = {}
+        for i, j in zip(a, b):
+            if i == j:          # Selbsttreffer: jede Sequenz ist sich selbst gleich
+                continue
+            nachbarn.setdefault(int(i), set()).add(int(j))
+            nachbarn.setdefault(int(j), set()).add(int(i))   # symmetrisch, konservativ
+        return nachbarn
 
 
 # ---------------------------------------------------------------------------
@@ -1540,39 +1777,58 @@ STANDARD_SCORE_SPALTEN: tuple[str, ...] = (
 LOG_SPALTEN: tuple[str, ...] = ("mic_apex", "mic_apex_geom")
 
 
+def baue_scorer(namen: Sequence[str], cfg_in: Config) -> list[Scorer]:
+    """Scorer-Namen -> Instanzen. Baut NUR die angeforderten.
+
+    Die Namen stehen in cfg.scorer_auswahl, damit die Scorer-Auswahl in der
+    config.yaml eines Laufs landet: Strings serialisieren nach YAML, Objekte
+    nicht. Welche Scorer gelaufen sind, gehoert zur Beschreibung des Laufs.
+
+    Die lambdas sind nicht Zierde: im Dict stehen BAUPLAENE, keine Objekte.
+    Ohne sie wuerde beim Anlegen des Dicts jeder Scorer instanziiert -- also
+    ProGen2 mit 764 Mio. Parametern geladen, auch wenn nur die Entropie
+    gebraucht wird.
+    """
+    def _apex() -> Scorer:
+        # Lazy, damit evaluation.py ohne apex_backends importierbar bleibt.
+        from aguirre.apex_backends import ApexNativeBackend
+        return APEXScorer.from_config(ApexNativeBackend.from_config(cfg_in), cfg_in)
+
+    bauplan = {
+        "aa_entropy":    lambda: AminoAcidEntropyScorer(),
+        "ident_bekannt": lambda: KnownAMPSimilarityScorer.from_config(cfg_in),
+        "apex":          _apex,
+        "progen2":       lambda: ProGen2Scorer(cfg_in),
+        "esm2_pppl":     lambda: ESMPseudoPerplexityScorer(cfg_in),
+    }
+
+    unbekannt = [n for n in namen if n not in bauplan]
+    if unbekannt:
+        raise KeyError(f"Unbekannte Scorer {unbekannt}. Erlaubt: {sorted(bauplan)}")
+    return [bauplan[n]() for n in namen]
+
 def run_evaluation(
     train: SequenceSet,
     generated: SequenceSet,
     evaluator: Evaluator,
-    mic_filter: MICFilter,
+    filters: Sequence[Filter],
     out_dir: Path,
     score_spalten: Sequence[str] | None = None,
     referenz: str = "train",
     speichern: bool = True,
-) -> dict[str, ComparisonResult]:
-    """Gesamte Auswertung: scoren, filtern, vergleichen, speichern.
-
-    Ablauf:
-        1. Evaluator auf train und generated anwenden.
-        2. mic_filter auf generated anwenden -> "gefiltert".
-        3. Je Score-Spalte eine DistributionComparison, dazu
-           CompositionComparison und PositionalComparison.
-        4. Alles mit ComparisonResult.save() nach out_dir schreiben.
+) -> tuple[dict[str, ComparisonResult], list[tuple[str, int]]]:
+    """Scoren, filtern, vergleichen, speichern.
 
     Args:
-        train: Referenzset (natuerliche AMPs).
-        generated: Ausgabe des Diffusionsmodells.
-        evaluator: bereits mit Scorern bestueckt.
-        mic_filter: Torres-Kriterium (1).
-        out_dir: Zielordner fuer CSVs und PNGs.
-        score_spalten: zu vergleichende Spalten. None -> STANDARD_SCORE_SPALTEN,
-            auf die tatsaechlich vorhandenen eingeschraenkt.
+        filters: Filterkaskade, in der Reihenfolge der Anwendung. Torres:
+            MICFilter -> SimilarityFilter -> DiversityFilter. Leere Liste =
+            nicht filtern.
         referenz: Gruppenlabel fuer das Enrichment in CompositionComparison.
-        speichern: False, um die Ergebnisse nur zurueckzubekommen (Notebook).
+        speichern: False gibt die Ergebnisse nur zurueck (Notebook).
 
     Returns:
-        Name des Vergleichs -> ComparisonResult. Die Figures sind offen,
-        im Skript also ggf. selbst schliessen.
+        (ergebnisse, stufen) -- Vergleichsname -> ComparisonResult, und die
+        Kaskade als [(Stufenname, n), ...] fuer die Laufmetadaten.
     """
     out_dir = Path(out_dir)
 
@@ -1581,24 +1837,32 @@ def run_evaluation(
     print(f"[run_evaluation] scoren: '{generated.name}' ({len(generated.data)} Sequenzen)")
     generated_bewertet = evaluator.run(generated)
 
-    gefiltert = mic_filter.apply(generated_bewertet)
+    # Kaskade. Jede Stufe meldet ihre Behaltequote selbst.
+    stufen: list[tuple[str, int]] = [("generiert", len(generated_bewertet.data))]
+    gefiltert = generated_bewertet
+    for f in filters:
+        gefiltert = f.apply(gefiltert)
+        stufen.append((type(f).__name__, len(gefiltert.data)))
+        if len(gefiltert.data) == 0:
+            print(
+                f"[run_evaluation] Nach {type(f).__name__} ist nichts mehr "
+                "uebrig -- Kaskade abgebrochen."
+            )
+            break
 
     groups: dict[str, SequenceSet] = {
         "train": train_bewertet,
         "generiert": generated_bewertet,
     }
-    if len(gefiltert.data) == 0:
-        print(
-            "[run_evaluation] Warnung: nach dem MIC-Filter ist nichts uebrig -- "
-            "die Gruppe 'gefiltert' wird uebersprungen."
-        )
-    else:
+    # Nur die ENDSTUFE wird verglichen, nicht jede Zwischenstufe: fuenf
+    # Gruppen in jedem Violinplot liest niemand. Die Zahlen der Stufen
+    # stehen im Log und in den Metadaten.
+    if filters and len(gefiltert.data) > 0:
         groups["gefiltert"] = gefiltert
 
     if referenz not in groups:
         raise KeyError(f"Referenz '{referenz}' nicht in den Gruppen {list(groups)}.")
 
-    # Nur Spalten vergleichen, die in ALLEN Gruppen stehen und numerisch sind.
     kandidaten = list(score_spalten) if score_spalten else list(STANDARD_SCORE_SPALTEN)
     spalten = [
         c for c in kandidaten
@@ -1610,7 +1874,6 @@ def run_evaluation(
         print(f"[run_evaluation] uebersprungen (fehlt oder leer): {uebersprungen}")
 
     ergebnisse: dict[str, ComparisonResult] = {}
-
     for spalte in spalten:
         ergebnisse[f"verteilung_{spalte}"] = DistributionComparison(
             column=spalte, log_scale=spalte in LOG_SPALTEN
@@ -1627,7 +1890,7 @@ def run_evaluation(
             geschrieben += res.save(out_dir)
         print(f"[run_evaluation] {len(geschrieben)} Dateien nach {out_dir} geschrieben.")
 
-    return ergebnisse
+    return ergebnisse, stufen
 
 
 if __name__ == "__main__":

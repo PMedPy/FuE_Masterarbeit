@@ -61,6 +61,10 @@ def read_fasta(path) -> tuple[list[str], list[str]]:
         raise ValueError("Achtung, Verschiebung durch Zeilenumbrüche in der Fasta")
     return ids, seqs
 
+#==mmseqs2-runner==
+M8_SPALTEN = ["query", "target", "fident", "alnlen", "qlen",
+              "tlen", "qcov", "tcov", "evalue", "bits"]
+
 def run_mmseqs_search(
     query_fasta_path: str | Path,
     out_path: str | Path,
