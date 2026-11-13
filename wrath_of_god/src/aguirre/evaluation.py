@@ -806,7 +806,7 @@ class KnownAMPSimilarityScorer(Scorer):
         if n == 0:
             return pd.DataFrame({self.columns[0]: []})
 
-        with tempfile.TemporaryDirectory(dir=TMP_DIR) as tmp:
+        with tempfile.TemporaryDirectory(dir=_tmp_bereit()) as tmp:
             tmp = Path(tmp)
             query = write_fasta(list(sequences), tmp / "query.fasta")
             out = run_mmseqs_search(
@@ -1197,7 +1197,7 @@ class DiversityFilter(Filter):
         Duenn besetzt: mmseqs meldet nur Treffer, und wir behalten davon nur
         die ueber der Schwelle. Eine n x n-Matrix braucht es nie.
         """
-        with tempfile.TemporaryDirectory(dir=TMP_DIR) as tmp:
+        with tempfile.TemporaryDirectory(dir=_tmp_bereit()) as tmp:
             tmp = Path(tmp)
             fa = write_fasta(sequences, tmp / "kandidaten.fasta")
             out = run_mmseqs_search(                 # target=None -> gegen sich selbst
@@ -1232,6 +1232,20 @@ class DiversityFilter(Filter):
 # ---------------------------------------------------------------------------
 # 5. Statistik-Helfer
 # ---------------------------------------------------------------------------
+
+def _tmp_bereit() -> Path:
+    """TMP_DIR anlegen, falls noetig, und zurueckgeben.
+
+    tempfile.TemporaryDirectory(dir=...) legt nur das temporaere
+    Unterverzeichnis an, nicht dessen Elternverzeichnis. wrath_of_god/tmp ist
+    vom rsync ausgeschlossen (Scratch), existiert auf einem frisch
+    aufgesetzten Rechner also nicht -- und der Lauf stirbt mitten im Scoring
+    mit FileNotFoundError.
+    """
+    pfad = Path(TMP_DIR)
+    pfad.mkdir(parents=True, exist_ok=True)
+    return pfad
+
 
 def _as_array(x) -> np.ndarray:
     """Series/Liste/Array -> float-Array ohne NaN."""

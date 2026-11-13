@@ -13,11 +13,11 @@
 #
 # AUS DER REPO-WURZEL abschicken, slurm_logs/ muss existieren:
 #   cd ~/FuE_Masterarbeit && mkdir -p slurm_logs
-#   JOB=$(sbatch --parsable wrath_of_god/scripts/eval.slurm); echo $JOB
+#   JOB=$(sbatch --parsable wrath_of_god/scripts/eval_run1.slurm); echo $JOB
 #
 # VORHER EINMALIG auf dem LOGIN-Knoten (der Rechenknoten hat kein Internet):
-#   export TORCH_HOME=~/FuE_Masterarbeit/.torch && mkdir -p $TORCH_HOME
-#   export HF_HOME=~/FuE_Masterarbeit/.hf       && mkdir -p $HF_HOME
+#   export TORCH_HOME=~/.cache/torch        && mkdir -p $TORCH_HOME
+#   export HF_HOME=~/.cache/huggingface     && mkdir -p $HF_HOME
 #   python -c "import esm; esm.pretrained.esm2_t6_8M_UR50D(); print('ESM ok')"
 #   python -c "from transformers import AutoModelForCausalLM as M; \
 #              from tokenizers import Tokenizer as T; \
@@ -49,8 +49,8 @@ conda activate fue-amp
 export PYTHONPATH="$PROJECT/wrath_of_god/src"
 
 # Gewichte NUR aus dem lokalen Cache -- der Rechenknoten darf nicht ins Netz.
-export TORCH_HOME="$PROJECT/.torch"
-export HF_HOME="$PROJECT/.hf"
+export TORCH_HOME="$HOME/.cache/torch"
+export HF_HOME="$HOME/.cache/huggingface"
 export HF_HUB_OFFLINE=1          # scheitert sofort statt nach Minuten im Timeout
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
