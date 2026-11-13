@@ -76,7 +76,7 @@ if M8_PATH.exists() and not FORCE:
     print(f"{M8_PATH.name} existiert schon -- Suche uebersprungen (FORCE = True zum Neubauen)")
 else:
     run_mmseqs_search(
-        fasta_path = FASTA_PATH,
+        query_fasta_path=_fasta_path = FASTA_PATH,
         out_path   = M8_PATH,
         tmp_dir    = TMP_DIR,
         extra_args = EXTRA_ARGS,

@@ -79,11 +79,47 @@ class Config:
     eval_subset_min: int = 100
     eval_t_grid: int = 20              # Stuetzstellen des festen t-Rasters in der Eval
     #train_num_steps: float = 1e5
-    adam_betas: tuple[float] = (0.9, 0.99)
+    adam_betas: tuple[float, float] = (0.9, 0.99)
     max_grad_norm: float = 1.0
     ema_update_every: int = 1
     #==Evaluation==
     progen_model_name: str = "hugohrban/progen2-medium"  # "hugohrban/progen2-medium" oder "hugohrban/progen2-small"
     progen_batch_size: int = 32
-    esm_scorer_model_name: str = "esm2_t6_8M_UR50D"
+    # BEWUSST ein anderes Modell als esm_model_name oben: der Generator
+    # dekodiert ueber den lm_head des 650M-ESM. Mit demselben Modell zu
+    # bewerten hiesse, den eigenen Decoder zu messen. Beide Felder immer
+    # zusammen aendern -- der Scorer prueft embed_dim.
+    esm_scorer_model_name: str = "esm2_t6_8M_UR50D" # "esm2_t6_8M_UR50D" oder "esm2_t33_650M_UR50D"
+    esm_scorer_embed_dim: int = 320 # 320 (8M) oder 1280 (650M)
 
+    #==APEX==
+    apex_bundle_path: Path = DATA_DIR / "models" / "apex_state_dicts.pt"
+    apex_device: str = "cpu"        # GRU auf mps erst mit Aequivalenztest freigeben
+    apex_batch_size: int = 512
+    apex_max_len: int = 50
+    apex_inaktiv_schwelle: float = 64.0  
+
+    #==Plots (Evaluation)==
+    # Kategoriale Palette: eine Farbe je Gruppe (train, generiert, gefiltert...).
+    # Zuweisung in fester Reihenfolge -- eine Gruppe behaelt ihre Farbe ueber
+    # alle Abbildungen hinweg, auch wenn in einer Abbildung eine Gruppe fehlt
+    # (z.B. die Referenz im Enrichment-Plot).
+    #
+    # Okabe-Ito, die uebliche barrierefreie Palette fuer Fachpublikationen.
+    # Geprueft: alle Nachbarpaare bleiben bei Deuteranopie, Protanopie und
+    # Tritanopie unterscheidbar, und die Helligkeiten liegen weit genug
+    # auseinander fuer den Schwarzweissdruck. Beim Aendern beides mitpruefen.
+    plot_farben: tuple[str, ...] = (
+        "#0072B2",   # Blau
+        "#E69F00",   # Orange
+        "#009E73",   # Gruen
+        "#D55E00",   # Zinnoberrot
+        "#56B4E9",   # Hellblau
+        "#CC79A7",   # Violett
+    )
+    # Sequenzielle Colormap fuer Heatmaps (Positionsprofile). Ein Farbton von
+    # hell nach dunkel -- kein Regenbogen, sonst liest man Spruenge in die
+    # Daten hinein, die nicht da sind. Alternativen: "cividis", "magma".
+    plot_cmap: str = "viridis"
+    plot_dpi: int = 200                # Aufloesung gespeicherter PNGs
+    plot_grid_alpha: float = 0.3       # Deckkraft der Hilfslinien
