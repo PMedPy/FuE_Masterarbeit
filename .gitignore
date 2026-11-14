@@ -187,3 +187,6 @@ wrath_of_god/tmp/
 # Fremdcode, separat geklont -- Reproduzierbarkeit ueber den Commit-Hash
 # in apex_net.py, nicht ueber eine Kopie im Repo.
 external/
+
+# SLURM-Joblogs (Cluster). Entstehen beim Lauf, nicht im Repo.
+slurm_logs/
