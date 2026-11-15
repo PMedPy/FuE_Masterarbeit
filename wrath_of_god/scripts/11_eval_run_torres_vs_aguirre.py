@@ -12,7 +12,9 @@ Verglichen wird in drei Runden, damit kein Plot ueberfuellt ist:
 
     roh         torres gegen aguirre -- Verteilungen, Komposition, Positionen
     gefiltert   torres_gefiltert gegen aguirre_gefiltert -- dasselbe
-    alle4       nur die Verteilungen (Violin + ECDF) mit allen vier Gruppen
+
+Zwei Gruppen je Abbildung, nie vier: ein Violinplot mit vier Gruppen zeigt
+nichts, was diese beiden Runden nicht lesbarer zeigen.
 
 Zusaetzlich zwei Tabellen:
 
@@ -237,15 +239,6 @@ def main(argv: list[str] | None = None) -> int:
             reference=referenz).compare(groups)
         ergebnisse[f"{runde}_positionen"] = PositionalComparison(
             max_length=konfig.pep_max_len).compare(groups)
-
-    # Alle vier in einem Bild -- nur die Verteilungen, nicht Komposition und
-    # Positionen: die zeichnen je Gruppe eine eigene Heatmap.
-    alle = {**roh, **fein}
-    if len(alle) > 2:
-        print(f"[Runde alle4] {[(n, len(s.data)) for n, s in alle.items()]}")
-        for c in spalten_von(alle):
-            ergebnisse[f"alle4_verteilung_{c}"] = DistributionComparison(
-                column=c, log_scale=c in LOG_SPALTEN).compare(alle)
 
     dateien = []
     for res in ergebnisse.values():
