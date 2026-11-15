@@ -17,9 +17,10 @@ Methoden, die du brauchen wirst:
     from_yaml(path)  -- Lauf spaeter exakt rekonstruieren
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 import torch
+import yaml
 
 #==Modulkonstanten==
 PROJECT_ROOT = Path(__file__).resolve().parents[3] # resolve macht aus einem relativen (zu dieser Config!), einen Absoluten pfad. parents[3] geht vier Verzeichnisse zurück -> FuE_Masterarbeit
@@ -34,6 +35,22 @@ RUNS_DIR = PROJECT_ROOT / "wrath_of_god" / "runs"
 TMP_DIR = PROJECT_ROOT / "wrath_of_god" / "tmp"
 SPLIT_DIR = PROJECT_ROOT / "wrath_of_god" / "splits"
 TRACKED_DIR = PROJECT_ROOT / "wrath_of_god" / "data_tracked"
+
+def _yaml_safe(obj):
+    """Rekursiv yaml-taugliche Typen erzwingen: Path -> str, Tupel -> Liste.
+
+    Liegt hier und nicht in helpers.py, weil Config selbst es braucht und
+    helpers.py bereits aus config.py importiert -- andersherum waere es ein
+    Zirkelimport. helpers.py reicht den Namen weiter.
+    """
+    if isinstance(obj, dict):
+        return {k: _yaml_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_yaml_safe(v) for v in obj]
+    if isinstance(obj, Path):
+        return str(obj)
+    return obj
+
 
 #==Configurations==
 @dataclass
@@ -92,6 +109,18 @@ class Config:
     esm_scorer_model_name: str = "esm2_t6_8M_UR50D" # "esm2_t6_8M_UR50D" oder "esm2_t33_650M_UR50D"
     esm_scorer_embed_dim: int = 320 # 320 (8M) oder 1280 (650M)
 
+    amp_referenz_fasta: Path = TRACKED_DIR / "torres_train.fasta"
+    similarity_max_ident: float = 0.60   # Torres' Kriterium (2)
+    similarity_cov_mode: int = 2
+    similarity_coverage: float = 0.8
+    similarity_evalue: float = 1e-3
+
+    diversity_max_ident: float = 0.40
+
+    scorer_auswahl: tuple[str, ...] = (
+    "aa_entropy", "ident_bekannt", "apex", "progen2", "esm2_pppl",
+    )
+
     #==APEX==
     apex_bundle_path: Path = DATA_DIR / "models" / "apex_state_dicts.pt"
     apex_device: str = "cpu"        # GRU auf mps erst mit Aequivalenztest freigeben
@@ -110,12 +139,12 @@ class Config:
     # Tritanopie unterscheidbar, und die Helligkeiten liegen weit genug
     # auseinander fuer den Schwarzweissdruck. Beim Aendern beides mitpruefen.
     plot_farben: tuple[str, ...] = (
-        "#0072B2",   # Blau
-        "#E69F00",   # Orange
-        "#009E73",   # Gruen
-        "#D55E00",   # Zinnoberrot
-        "#56B4E9",   # Hellblau
-        "#CC79A7",   # Violett
+        "#E71D36",   # 
+        "#2EC4B6",   # 
+        "#CBF3F0",   # 
+        "#FFBF69",   # 
+        "#FF9F1C",   # 
+        "#CC79A7",   # 
     )
     # Sequenzielle Colormap fuer Heatmaps (Positionsprofile). Ein Farbton von
     # hell nach dunkel -- kein Regenbogen, sonst liest man Spruenge in die
@@ -123,3 +152,51 @@ class Config:
     plot_cmap: str = "viridis"
     plot_dpi: int = 200                # Aufloesung gespeicherter PNGs
     plot_grid_alpha: float = 0.3       # Deckkraft der Hilfslinien
+
+    # ==== Serialisierung ====
+
+    def to_yaml(self, path: str | Path) -> Path:
+        """Config nach YAML schreiben -- die Provenienz eines Laufs.
+
+        Jeder Lauf schreibt seine Config neben die Ergebnisse. Ohne sie sieht
+        man einer Abbildung nach drei Monaten nicht mehr an, welches Modell,
+        welche Schwelle, welcher Datensatz dahinterstand.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                _yaml_safe(asdict(self)),
+                f,
+                sort_keys=False,      # Feldreihenfolge der Dataclass behalten
+                allow_unicode=True,   # Umlaute lesbar statt \uXXXX
+            )
+        return path
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "Config":
+        """Config aus YAML rekonstruieren.
+
+        YAML kennt weder Tupel noch Path -- beide kommen als Liste bzw. str
+        zurueck. Hier werden sie anhand der Feld-Annotationen zurueckgewandelt;
+        ohne das waere z.B. apex_bundle_path ein str und .is_file() wuerde
+        mit AttributeError sterben.
+        """
+        with open(Path(path), encoding="utf-8") as f:
+            d = yaml.safe_load(f) or {}
+
+        bekannt = {fd.name: fd for fd in fields(cls)}
+        unbekannt = sorted(set(d) - set(bekannt))
+        if unbekannt:
+            raise ValueError(
+                f"Unbekannte Felder in {path}: {unbekannt}. Stammt die Datei "
+                "aus einer aelteren Config-Version?"
+            )
+
+        for name, wert in list(d.items()):
+            typ = str(bekannt[name].type)
+            if "Path" in typ and isinstance(wert, str):
+                d[name] = Path(wert)
+            elif typ.startswith("tuple") and isinstance(wert, list):
+                d[name] = tuple(wert)
+        return cls(**d)

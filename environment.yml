@@ -83,7 +83,7 @@ dependencies:
 
       # HF-Stack -- gebraucht fuer ProGen2-Perplexitaet in der Evaluation
       - fair-esm>=2.0.0,<3        # faktisch eingefroren, Pin ist Formsache
-      - transformers>=4.45,<5     # steht schon, richtig so
+      - transformers>=4.45.6     # steht schon, richtig so
       - tokenizers                # KEIN Pin: transformers 4.x grenzt es ein
       - safetensors               # dito
       - huggingface_hub           # dito
