@@ -180,10 +180,13 @@ def main(argv: list[str] | None = None) -> int:
     # ---- Laden. Laengenfilter ZUERST: APEX ueberspringt > 50 Residuen still,
     #      und Torres' Satz enthaelt Sequenzen bis hinunter zu 1 Residuum.
     laengen = LengthFilter.from_config(konfig)
-    saetze = [
-        laengen.apply(lade(args.torres, "torres", args.limit, konfig.seed, zusatz=("ppl",))),
-        laengen.apply(lade(args.aguirre, "aguirre", args.limit, konfig.seed)),
-    ]
+    saetze = []
+    for pfad, name, zusatz in ((args.torres, "torres", ("ppl",)),
+                               (args.aguirre, "aguirre", ())):
+        s = laengen.apply(lade(pfad, name, args.limit, konfig.seed, zusatz=zusatz))
+        # LengthFilter haengt "_len6-50" an. Fuer Plotlabels und Dateinamen ist
+        # das Rauschen; die Zahl steht in den Filterstufen der Metadaten.
+        saetze.append(SequenceSet(name=name, data=s.data))
 
     # ---- Scoren
     scorers = baue_scorer(scorer_namen, konfig)
@@ -226,19 +229,19 @@ def main(argv: list[str] | None = None) -> int:
         return da
 
     ergebnisse = {}
-    for runde, groups, referenz in (("roh", roh, roh_ref),
-                                    ("gefiltert", fein, fein_ref)):
-        if len(groups) < 2 or referenz not in groups:
-            print(f"[Vergleiche] Runde '{runde}' uebersprungen ({len(groups)} Gruppe(n)).")
+    for runde, gr, referenz in (("roh", roh, roh_ref),
+                                ("gefiltert", fein, fein_ref)):
+        if len(gr) < 2 or referenz not in gr:
+            print(f"[Vergleiche] Runde '{runde}' uebersprungen ({len(gr)} Gruppe(n)).")
             continue
-        print(f"[Runde {runde}] {[(n, len(s.data)) for n, s in groups.items()]}")
-        for c in spalten_von(groups):
+        print(f"[Runde {runde}] {[(n, len(s.data)) for n, s in gr.items()]}")
+        for c in spalten_von(gr):
             ergebnisse[f"{runde}_verteilung_{c}"] = DistributionComparison(
-                column=c, log_scale=c in LOG_SPALTEN).compare(groups)
+                column=c, log_scale=c in LOG_SPALTEN).compare(gr)
         ergebnisse[f"{runde}_komposition"] = CompositionComparison(
-            reference=referenz).compare(groups)
+            reference=referenz).compare(gr)
         ergebnisse[f"{runde}_positionen"] = PositionalComparison(
-            max_length=konfig.pep_max_len).compare(groups)
+            max_length=konfig.pep_max_len).compare(gr)
 
     dateien = []
     for res in ergebnisse.values():
@@ -272,7 +275,8 @@ def main(argv: list[str] | None = None) -> int:
         "fingerabdruecke": fingerabdruecke,
         "filter": [type(f).__name__ for f in filters],
         "filterstufen": stufen,
-        "gruppen": {n: len(s.data) for n, s in groups.items()},
+        "gruppen": {"roh": {n: len(s.data) for n, s in roh.items()},
+                    "gefiltert": {n: len(s.data) for n, s in fein.items()}},
         "vergleiche": sorted(ergebnisse),
     }, indent=2, ensure_ascii=False), encoding="utf-8")
 
