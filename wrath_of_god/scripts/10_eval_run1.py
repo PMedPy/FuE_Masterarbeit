@@ -54,7 +54,7 @@ from aguirre.evaluation import (
     SequenceSet,
     SimilarityFilter,
     baue_scorer,
-    run_evaluation,
+    run_eval_train_gen,
 )
 
 # Welcher Filter welche Spalte braucht und welcher Scorer sie liefert.
@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {name:16s} {fp}")
 
     # ---- 8.-10. Scoren, filtern, vergleichen ----------------------------
-    ergebnisse, stufen = run_evaluation(
+    ergebnisse, stufen = run_eval_train_gen(
         train=train,
         generated=generiert,
         evaluator=evaluator,

@@ -49,20 +49,17 @@ import pandas as pd
 
 from aguirre.config import Config, CACHE_DIR
 from aguirre.evaluation import (
-    STANDARD_SCORE_SPALTEN,
-    LOG_SPALTEN,
-    CompositionComparison,
-    DistributionComparison,
+    DiversityFilter,
     Evaluator,
     Filter,
     LengthFilter,
     MICFilter,
-    PositionalComparison,
     SequenceSet,
     SimilarityFilter,
-    DiversityFilter,
     baue_scorer,
     build_stem,
+    compare,
+    kaskade,
 )
 
 TORRES = "wrath_of_god/data_tracked/torres_cellbiomaterial.csv"
@@ -92,19 +89,6 @@ def lade(pfad: Path, name: str, limit: int | None, seed: int,
         print(f"[{name}] auf {limit} Sequenzen begrenzt (Zufallsstichprobe).")
 
     return SequenceSet(name=name, data=df.reset_index(drop=True))
-
-
-def kaskade(seqset: SequenceSet, filters: list[Filter]) -> tuple[SequenceSet, list[dict]]:
-    """Wendet die Filter in Reihenfolge an und protokolliert jede Stufe."""
-    stufen = [{"satz": seqset.name, "stufe": "ungefiltert", "n": len(seqset.data)}]
-    aktuell = seqset
-    for f in filters:
-        aktuell = f.apply(aktuell)
-        stufen.append({"satz": seqset.name, "stufe": type(f).__name__, "n": len(aktuell.data)})
-        if len(aktuell.data) == 0:
-            print(f"[{seqset.name}] nach {type(f).__name__} nichts mehr uebrig.")
-            break
-    return aktuell, stufen
 
 
 def top_tabelle(links: SequenceSet, rechts: SequenceSet, n: int = 30) -> pd.DataFrame:
@@ -208,40 +192,26 @@ def main(argv: list[str] | None = None) -> int:
     ]
     gefiltert, stufen = [], []
     for s in bewertet:
-        g, st = kaskade(s, filters)
-        gefiltert.append(SequenceSet(name=f"{s.name}_gefiltert", data=g.data))
+        g, st = kaskade(s, filters)          # benennt "<name>_gefiltert" selbst
+        gefiltert.append(g)
         stufen += st
 
-    # ---- Vergleiche in drei Runden. Zwei Gruppen je Bild bleiben lesbar;
-    #      vier Violinen nebeneinander sind der Ausnahmefall, nicht die Regel.
+    # ---- Vergleiche, zwei Runden: Rohsaetze unter sich, Gefilterte unter
+    #      sich. Zwei Gruppen je Bild bleiben lesbar.
     roh = {s.name: s for s in bewertet}
     fein = {g.name: g for g in gefiltert if len(g.data) > 0}
-    roh_ref = bewertet[0].name                    # "torres"
-    fein_ref = f"{bewertet[0].name}_gefiltert"
-
-    def spalten_von(groups: dict) -> list[str]:
-        """Score-Spalten, die in ALLEN Gruppen dieser Runde vorliegen."""
-        da = [c for c in STANDARD_SCORE_SPALTEN
-              if all(c in s.data.columns for s in groups.values())]
-        fehlt = [c for c in STANDARD_SCORE_SPALTEN if c not in da]
-        if fehlt:
-            print(f"[Vergleiche] uebersprungen (fehlt in einer Gruppe): {fehlt}")
-        return da
 
     ergebnisse = {}
-    for runde, gr, referenz in (("roh", roh, roh_ref),
-                                ("gefiltert", fein, fein_ref)):
+    for runde, gr, referenz in (("roh", roh, bewertet[0].name),
+                                ("gefiltert", fein, gefiltert[0].name)):
         if len(gr) < 2 or referenz not in gr:
             print(f"[Vergleiche] Runde '{runde}' uebersprungen ({len(gr)} Gruppe(n)).")
             continue
         print(f"[Runde {runde}] {[(n, len(s.data)) for n, s in gr.items()]}")
-        for c in spalten_von(gr):
-            ergebnisse[f"{runde}_verteilung_{c}"] = DistributionComparison(
-                column=c, log_scale=c in LOG_SPALTEN).compare(gr)
-        ergebnisse[f"{runde}_komposition"] = CompositionComparison(
-            reference=referenz).compare(gr)
-        ergebnisse[f"{runde}_positionen"] = PositionalComparison(
-            max_length=konfig.pep_max_len).compare(gr)
+        # speichern=False: der Block darunter schreibt alles zusammen und
+        # zaehlt die Dateien fuer die Schlussmeldung.
+        ergebnisse |= compare(gr, referenz=referenz, praefix=runde,
+                              max_length=konfig.pep_max_len, speichern=False)
 
     dateien = []
     for res in ergebnisse.values():

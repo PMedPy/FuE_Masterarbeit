@@ -1821,7 +1821,149 @@ def baue_scorer(namen: Sequence[str], cfg_in: Config) -> list[Scorer]:
         raise KeyError(f"Unbekannte Scorer {unbekannt}. Erlaubt: {sorted(bauplan)}")
     return [bauplan[n]() for n in namen]
 
-def run_evaluation(
+def kaskade(
+    seqset: SequenceSet,
+    filters: Sequence[Filter],
+    name: str | None = None,
+) -> tuple[SequenceSet, list[dict]]:
+    """Filter in Reihenfolge anwenden und jede Stufe protokollieren.
+
+    Nicht mehr als eine Schleife mit Buchfuehrung -- aber die Stufengroessen
+    gehoeren in die Laufmetadaten, und beide Eval-Skripte brauchen sie in
+    derselben Form. Bricht ab, sobald nichts mehr uebrig ist: ein Filter auf
+    einem leeren Set scheitert sonst erst im Plot.
+
+    Args:
+        seqset: bereits BEWERTETES Set -- die Filter brauchen ihre Spalten.
+        filters: Kaskade in der Reihenfolge der Anwendung. Torres:
+            MICFilter -> SimilarityFilter -> DiversityFilter.
+        name: Name des Ergebnis-Sets. None -> "<seqset.name>_gefiltert".
+
+    Returns:
+        (gefiltert, stufen) -- stufen als [{"satz", "stufe", "n"}, ...].
+    """
+    stufen = [{"satz": seqset.name, "stufe": "ungefiltert", "n": len(seqset.data)}]
+    if not filters:
+        return seqset, stufen
+
+    aktuell = seqset
+    for f in filters:
+        aktuell = f.apply(aktuell)
+        stufen.append({"satz": seqset.name, "stufe": type(f).__name__,
+                       "n": len(aktuell.data)})
+        if len(aktuell.data) == 0:
+            print(f"[kaskade] '{seqset.name}': nach {type(f).__name__} "
+                  "ist nichts mehr uebrig.")
+            break
+
+    return SequenceSet(name=name or f"{seqset.name}_gefiltert",
+                       data=aktuell.data), stufen
+
+
+# Vergleichsarten, die compare() kennt.
+ARTEN: tuple[str, ...] = ("verteilung", "komposition", "positionen")
+
+
+def compare(
+    groups: Mapping[str, SequenceSet],
+    out_dir: Path | None = None,
+    *,
+    referenz: str | None = None,
+    spalten: Sequence[str] | None = None,
+    arten: Sequence[str] = ARTEN,
+    praefix: str = "",
+    max_length: int | None = None,
+    speichern: bool = True,
+    close: bool = True,
+) -> dict[str, ComparisonResult]:
+    """Beliebig viele benannte Gruppen vergleichen und speichern.
+
+    Die Gruppenlabels kommen aus dem DICT, nicht aus seqset.name. Derselbe
+    Satz kann deshalb in zwei Runden unter verschiedenen Namen auftauchen,
+    und die Namen stehen an einer Stelle -- beim Aufrufer.
+
+    Args:
+        groups: Label -> SequenceSet. Mindestens zwei, keines leer.
+        out_dir: Zielordner. Nur noetig, wenn speichern.
+        referenz: Bezugsgruppe fuer das Enrichment der Komposition.
+            None -> die erste Gruppe im Dict.
+        spalten: Spalten fuer die Verteilungsvergleiche. None -> die aus
+            STANDARD_SCORE_SPALTEN, die in ALLEN Gruppen vorliegen.
+        arten: welche Vergleiche gerechnet werden, Teilmenge von ARTEN.
+            ("verteilung",) laesst Komposition und Positionsprofile weg --
+            sinnvoll, wenn viele Gruppen in ein Bild sollen, denn die
+            Positionsprofile zeichnen JE GRUPPE eine eigene Heatmap.
+        praefix: Rundenname. Landet in den Schluesseln des Rueckgabewerts
+            ("roh_verteilung_mic_apex"), NICHT in den Dateinamen -- die
+            trennen sich ueber die Gruppennamen in build_stem().
+        max_length: Spaltenzahl der Positionsprofile. None -> cfg.pep_max_len.
+            Explizit uebergeben, wenn der Aufrufer eine eigene Config hat.
+        speichern: False gibt die Ergebnisse nur zurueck (Notebook).
+        close: Figures nach dem Speichern schliessen. Im Skript True, sonst
+            laeuft der Speicher voll; im Notebook False, sonst ist das Bild
+            weg, bevor man es ansieht.
+
+    Returns:
+        Vergleichsname -> ComparisonResult.
+    """
+    unbekannt = [a for a in arten if a not in ARTEN]
+    if unbekannt:
+        raise KeyError(f"Unbekannte Vergleichsarten {unbekannt}. "
+                       f"Erlaubt: {list(ARTEN)}")
+    if speichern and out_dir is None:
+        raise ValueError("speichern=True braucht ein out_dir.")
+
+    # Dieselbe Pruefung, die auch jede Comparison macht -- aber hier, bevor
+    # irgendetwas gerechnet wird.
+    Comparison._pruefe_gruppen(groups)
+
+    referenz = next(iter(groups)) if referenz is None else referenz
+    if referenz not in groups:
+        raise KeyError(f"Referenz '{referenz}' nicht in den Gruppen {list(groups)}.")
+
+    def schluessel(art: str, score: str | None = None) -> str:
+        teile = ([praefix] if praefix else []) + [art]
+        if score:
+            teile.append(score)
+        return "_".join(teile)
+
+    ergebnisse: dict[str, ComparisonResult] = {}
+
+    if "verteilung" in arten:
+        kandidaten = list(spalten) if spalten else list(STANDARD_SCORE_SPALTEN)
+        da = [
+            c for c in kandidaten
+            if all(c in s.data.columns for s in groups.values())
+            and all(_as_array(s.data[c]).size > 0 for s in groups.values())
+        ]
+        fehlt = [c for c in kandidaten if c not in da]
+        if fehlt:
+            print(f"[compare] uebersprungen (fehlt oder leer in einer Gruppe): {fehlt}")
+        for c in da:
+            ergebnisse[schluessel("verteilung", c)] = DistributionComparison(
+                column=c, log_scale=c in LOG_SPALTEN
+            ).compare(groups)
+
+    if "komposition" in arten:
+        ergebnisse[schluessel("komposition")] = CompositionComparison(
+            reference=referenz
+        ).compare(groups)
+
+    if "positionen" in arten:
+        ergebnisse[schluessel("positionen")] = PositionalComparison(
+            max_length=cfg.pep_max_len if max_length is None else max_length
+        ).compare(groups)
+
+    if speichern:
+        geschrieben: list[Path] = []
+        for res in ergebnisse.values():
+            geschrieben += res.save(Path(out_dir), close=close)
+        print(f"[compare] {len(geschrieben)} Dateien nach {out_dir} geschrieben.")
+
+    return ergebnisse
+
+
+def run_eval_train_gen(
     train: SequenceSet,
     generated: SequenceSet,
     evaluator: Evaluator,
@@ -1831,38 +1973,35 @@ def run_evaluation(
     referenz: str = "train",
     speichern: bool = True,
 ) -> tuple[dict[str, ComparisonResult], list[tuple[str, int]]]:
-    """Scoren, filtern, vergleichen, speichern.
+    """Der Spezialfall: Trainingssatz gegen EINEN generierten Satz.
+
+    Scoren, Kaskade auf die generierten, dann train/generiert/gefiltert in
+    einem Bild. Fuer alles andere -- zwei generierte Saetze, eigene Runden,
+    andere Gruppennamen -- die Teile einzeln benutzen:
+    Evaluator.run(), kaskade(), compare().
+
+    Die Gruppenlabels sind hier absichtlich fest und nicht seqset.name:
+    Dieser Aufruf beschreibt drei ROLLEN, nicht drei Datensaetze.
 
     Args:
-        filters: Filterkaskade, in der Reihenfolge der Anwendung. Torres:
-            MICFilter -> SimilarityFilter -> DiversityFilter. Leere Liste =
-            nicht filtern.
-        referenz: Gruppenlabel fuer das Enrichment in CompositionComparison.
+        filters: leere Liste = nicht filtern, dann nur zwei Gruppen.
+        referenz: Gruppenlabel fuer das Enrichment.
         speichern: False gibt die Ergebnisse nur zurueck (Notebook).
 
     Returns:
-        (ergebnisse, stufen) -- Vergleichsname -> ComparisonResult, und die
-        Kaskade als [(Stufenname, n), ...] fuer die Laufmetadaten.
+        (ergebnisse, stufen) -- stufen als [(Stufenname, n), ...].
     """
-    out_dir = Path(out_dir)
-
-    print(f"[run_evaluation] scoren: '{train.name}' ({len(train.data)} Sequenzen)")
+    print(f"[run_eval_train_gen] scoren: '{train.name}' "
+          f"({len(train.data)} Sequenzen)")
     train_bewertet = evaluator.run(train)
-    print(f"[run_evaluation] scoren: '{generated.name}' ({len(generated.data)} Sequenzen)")
+    print(f"[run_eval_train_gen] scoren: '{generated.name}' "
+          f"({len(generated.data)} Sequenzen)")
     generated_bewertet = evaluator.run(generated)
 
-    # Kaskade. Jede Stufe meldet ihre Behaltequote selbst.
-    stufen: list[tuple[str, int]] = [("generiert", len(generated_bewertet.data))]
-    gefiltert = generated_bewertet
-    for f in filters:
-        gefiltert = f.apply(gefiltert)
-        stufen.append((type(f).__name__, len(gefiltert.data)))
-        if len(gefiltert.data) == 0:
-            print(
-                f"[run_evaluation] Nach {type(f).__name__} ist nichts mehr "
-                "uebrig -- Kaskade abgebrochen."
-            )
-            break
+    gefiltert, protokoll = kaskade(generated_bewertet, filters, name="gefiltert")
+    stufen = [("generiert", len(generated_bewertet.data))] + [
+        (d["stufe"], d["n"]) for d in protokoll if d["stufe"] != "ungefiltert"
+    ]
 
     groups: dict[str, SequenceSet] = {
         "train": train_bewertet,
@@ -1874,39 +2013,15 @@ def run_evaluation(
     if filters and len(gefiltert.data) > 0:
         groups["gefiltert"] = gefiltert
 
-    if referenz not in groups:
-        raise KeyError(f"Referenz '{referenz}' nicht in den Gruppen {list(groups)}.")
-
-    kandidaten = list(score_spalten) if score_spalten else list(STANDARD_SCORE_SPALTEN)
-    spalten = [
-        c for c in kandidaten
-        if all(c in s.data.columns for s in groups.values())
-        and all(_as_array(s.data[c]).size > 0 for s in groups.values())
-    ]
-    uebersprungen = [c for c in kandidaten if c not in spalten]
-    if uebersprungen:
-        print(f"[run_evaluation] uebersprungen (fehlt oder leer): {uebersprungen}")
-
-    ergebnisse: dict[str, ComparisonResult] = {}
-    for spalte in spalten:
-        ergebnisse[f"verteilung_{spalte}"] = DistributionComparison(
-            column=spalte, log_scale=spalte in LOG_SPALTEN
-        ).compare(groups)
-
-    ergebnisse["komposition"] = CompositionComparison(reference=referenz).compare(groups)
-    ergebnisse["positionen"] = PositionalComparison(
-        max_length=cfg.pep_max_len
-    ).compare(groups)
-
-    if speichern:
-        geschrieben: list[Path] = []
-        for res in ergebnisse.values():
-            geschrieben += res.save(out_dir)
-        print(f"[run_evaluation] {len(geschrieben)} Dateien nach {out_dir} geschrieben.")
-
+    ergebnisse = compare(
+        groups, out_dir,
+        referenz=referenz,
+        spalten=score_spalten,
+        speichern=speichern,
+    )
     return ergebnisse, stufen
 
 
 if __name__ == "__main__":
-    # TODO: argparse (Pfade, Scorer-Auswahl, max_mic) und run_evaluation aufrufen.
+    # TODO: argparse (Pfade, Scorer-Auswahl, max_mic) und run_eval_train_gen aufrufen.
     raise NotImplementedError

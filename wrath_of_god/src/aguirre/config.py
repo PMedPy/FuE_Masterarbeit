@@ -35,6 +35,7 @@ RUNS_DIR = PROJECT_ROOT / "wrath_of_god" / "runs"
 TMP_DIR = PROJECT_ROOT / "wrath_of_god" / "tmp"
 SPLIT_DIR = PROJECT_ROOT / "wrath_of_god" / "splits"
 TRACKED_DIR = PROJECT_ROOT / "wrath_of_god" / "data_tracked"
+RESULTS_DIR = PROJECT_ROOT / "wrath_of_god" / "results"
 
 def _yaml_safe(obj):
     """Rekursiv yaml-taugliche Typen erzwingen: Path -> str, Tupel -> Liste.
@@ -139,12 +140,12 @@ class Config:
     # Tritanopie unterscheidbar, und die Helligkeiten liegen weit genug
     # auseinander fuer den Schwarzweissdruck. Beim Aendern beides mitpruefen.
     plot_farben: tuple[str, ...] = (
-        "#E71D36",   # 
-        "#2EC4B6",   # 
-        "#CBF3F0",   # 
-        "#FFBF69",   # 
-        "#FF9F1C",   # 
-        "#CC79A7",   # 
+        "#E71D36",   # 0
+        "#2EC4B6",   # 1
+        "#CBF3F0",   # 2
+        "#FFBF69",   # 3
+        "#FF9F1C",   # 4
+        "#CC79A7",   # 5
     )
     # Sequenzielle Colormap fuer Heatmaps (Positionsprofile). Ein Farbton von
     # hell nach dunkel -- kein Regenbogen, sonst liest man Spruenge in die
