@@ -1,0 +1,4 @@
+art,gruppe,referenz,spalte,n,median,mittelwert,std,q25,q75,U,p,cliffs_delta,effekt
+kennzahl,torres_len6-50_gefiltert,,apex_n_inaktiv,156,3.0,2.6858974358974357,0.8636343848545288,2.0,3.0,,,,
+kennzahl,aguirre_len6-50_gefiltert,,apex_n_inaktiv,173,3.0,2.8439306358381504,0.917485590684741,2.0,3.0,,,,
+test,torres_len6-50_gefiltert,aguirre_len6-50_gefiltert,apex_n_inaktiv,329,,,,,,12211.5,0.11327069380512678,-0.09504224099599823,vernachlaessigbar

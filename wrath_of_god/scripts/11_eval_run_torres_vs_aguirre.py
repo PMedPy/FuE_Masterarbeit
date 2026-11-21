@@ -217,7 +217,19 @@ def main(argv: list[str] | None = None) -> int:
     for res in ergebnisse.values():
         dateien += res.save(out_dir, close=True)
 
-    # ---- Zwei Zusatztabellen
+    # ---- Zusatztabellen
+    # Die gefilterten Saetze vollstaendig, mit allen Score-Spalten. Nach
+    # Entropie sortiert: oben stehen die niederkomplexen Wiederholungen, und
+    # die will man von Hand sehen, nicht nur als Quantil.
+    for g in gefiltert:
+        if len(g.data) == 0:
+            continue
+        df = (g.data.sort_values("aa_entropy")
+              if "aa_entropy" in g.data.columns else g.data)
+        pfad = out_dir / f"{build_stem('gefiltert', [g.name])}.csv"
+        df.to_csv(pfad, index=False)
+        dateien.append(pfad)
+
     if len(gefiltert) == 2 and all(len(g.data) > 0 for g in gefiltert):
         stamm = build_stem("top", [g.name for g in gefiltert])
         pfad = out_dir / f"{stamm}.csv"
