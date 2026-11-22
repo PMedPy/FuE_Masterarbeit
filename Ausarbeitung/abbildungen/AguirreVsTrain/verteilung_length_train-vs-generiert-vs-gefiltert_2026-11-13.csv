@@ -1,0 +1,7 @@
+art,gruppe,referenz,spalte,n,median,mittelwert,std,q25,q75,U,p,cliffs_delta,effekt
+kennzahl,train,,length,19670,18.0,20.985460091509914,11.54068206820236,12.0,29.0,,,,
+kennzahl,generiert,,length,50000,19.0,21.3015,11.173787845699255,12.0,28.0,,,,
+kennzahl,gefiltert,,length,173,14.0,15.589595375722544,3.4990540845334355,13.0,18.0,,,,
+test,train,generiert,length,69670,,,,,,477929143.0,7.0043807602567335e-09,-0.02810545399084896,vernachlaessigbar
+test,train,gefiltert,length,19843,,,,,,2012049.5,3.384797628349311e-05,0.18254640880893125,klein
+test,generiert,gefiltert,length,50173,,,,,,5292353.0,3.526057160418179e-07,0.22366543352601154,klein

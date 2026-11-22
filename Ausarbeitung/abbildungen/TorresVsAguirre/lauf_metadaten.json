@@ -1,0 +1,96 @@
+{
+  "zeitpunkt": "2026-11-15T19:26:17",
+  "dauer_s": 1119.7,
+  "host": "bioinf-stheno.mni.thm.de",
+  "slurm_job_id": "3810",
+  "eingaben": {
+    "torres": "wrath_of_god/data_tracked/torres_cellbiomaterial.csv",
+    "aguirre": "wrath_of_god/results/50k_samples/ampdiffusion_650M_50k.csv",
+    "limit": null
+  },
+  "scorer": [
+    "aa_entropy",
+    "ident_bekannt",
+    "apex",
+    "progen2",
+    "esm2_pppl"
+  ],
+  "fingerabdruecke": {
+    "aa_entropy": "aa_entropy",
+    "ident_bekannt": "ident_bekannt__torres_train__637714__cm2__c0.8__e0.001",
+    "apex": "apex__ApexNativeBackend__inakt64",
+    "progen2": "progen2__hugohrban-progen2-medium",
+    "esm2_pppl": "esm2_pppl__esm2_t6_8M_UR50D"
+  },
+  "filter": [
+    "MICFilter",
+    "SimilarityFilter",
+    "DiversityFilter"
+  ],
+  "filterstufen": [
+    {
+      "satz": "torres_len6-50",
+      "stufe": "ungefiltert",
+      "n": 48868
+    },
+    {
+      "satz": "torres_len6-50",
+      "stufe": "MICFilter",
+      "n": 167
+    },
+    {
+      "satz": "torres_len6-50",
+      "stufe": "SimilarityFilter",
+      "n": 163
+    },
+    {
+      "satz": "torres_len6-50",
+      "stufe": "DiversityFilter",
+      "n": 156
+    },
+    {
+      "satz": "aguirre_len6-50",
+      "stufe": "ungefiltert",
+      "n": 50000
+    },
+    {
+      "satz": "aguirre_len6-50",
+      "stufe": "MICFilter",
+      "n": 223
+    },
+    {
+      "satz": "aguirre_len6-50",
+      "stufe": "SimilarityFilter",
+      "n": 210
+    },
+    {
+      "satz": "aguirre_len6-50",
+      "stufe": "DiversityFilter",
+      "n": 173
+    }
+  ],
+  "gruppen": {
+    "torres_len6-50_gefiltert": 156,
+    "aguirre_len6-50_gefiltert": 173
+  },
+  "vergleiche": [
+    "gefiltert_komposition",
+    "gefiltert_positionen",
+    "gefiltert_verteilung_aa_entropy",
+    "gefiltert_verteilung_apex_n_inaktiv",
+    "gefiltert_verteilung_length",
+    "gefiltert_verteilung_mic_apex",
+    "gefiltert_verteilung_mic_apex_geom",
+    "gefiltert_verteilung_ppl_progen2",
+    "gefiltert_verteilung_pppl_esm2",
+    "roh_komposition",
+    "roh_positionen",
+    "roh_verteilung_aa_entropy",
+    "roh_verteilung_apex_n_inaktiv",
+    "roh_verteilung_length",
+    "roh_verteilung_mic_apex",
+    "roh_verteilung_mic_apex_geom",
+    "roh_verteilung_ppl_progen2",
+    "roh_verteilung_pppl_esm2"
+  ]
+}
