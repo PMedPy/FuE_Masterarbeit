@@ -1,0 +1,36 @@
+{
+  "erzeugt": "2026-11-22T20:39:19",
+  "skript": "scripts/13_dedup_topup.py",
+  "auswahlregel": "erste N neue Sequenzen in Generierungsreihenfolge",
+  "ziel": 50000,
+  "bestand": {
+    "datei": "results/50k_samples/aguirre-small_50k.csv",
+    "ziehungen": 50000,
+    "verschieden": 49975,
+    "entfernt": 25,
+    "p_neu_good_turing": 0.9991
+  },
+  "nachzug": [
+    {
+      "datei": "results/50k_samples/topup_aguirre-small_s90000_n200.csv",
+      "ziehungen": 200,
+      "geprueft": 25,
+      "genommen": 25,
+      "verworfen_bekannt": 0,
+      "verworfen_intern": 0,
+      "kollisionsrate": 0.0,
+      "ungenutzt": false
+    }
+  ],
+  "ergebnis": {
+    "datei_csv": "results/50k_dedup/aguirre-small_50k_uniq.csv",
+    "datei_faa": "results/50k_dedup/aguirre-small_50k_uniq.faa",
+    "datei_entfernt": "results/50k_dedup/aguirre-small_50k_uniq_entfernt.csv",
+    "sequenzen": 50000,
+    "aus_bestand": 49975,
+    "aus_nachzug": 25,
+    "laenge_min": 6,
+    "laenge_median": 19.0,
+    "laenge_max": 50
+  }
+}

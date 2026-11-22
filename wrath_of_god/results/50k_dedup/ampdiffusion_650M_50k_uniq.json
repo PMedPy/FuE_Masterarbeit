@@ -1,0 +1,36 @@
+{
+  "erzeugt": "2026-11-22T20:39:15",
+  "skript": "scripts/13_dedup_topup.py",
+  "auswahlregel": "erste N neue Sequenzen in Generierungsreihenfolge",
+  "ziel": 50000,
+  "bestand": {
+    "datei": "results/50k_samples/ampdiffusion_650M_50k.csv",
+    "ziehungen": 50000,
+    "verschieden": 48823,
+    "entfernt": 1177,
+    "p_neu_good_turing": 0.9686
+  },
+  "nachzug": [
+    {
+      "datei": "results/50k_samples/topup_ampdiffusion_650M_s90000_n2500.csv",
+      "ziehungen": 2000,
+      "geprueft": 1218,
+      "genommen": 1177,
+      "verworfen_bekannt": 41,
+      "verworfen_intern": 0,
+      "kollisionsrate": 0.03366,
+      "ungenutzt": false
+    }
+  ],
+  "ergebnis": {
+    "datei_csv": "results/50k_dedup/ampdiffusion_650M_50k_uniq.csv",
+    "datei_faa": "results/50k_dedup/ampdiffusion_650M_50k_uniq.faa",
+    "datei_entfernt": "results/50k_dedup/ampdiffusion_650M_50k_uniq_entfernt.csv",
+    "sequenzen": 50000,
+    "aus_bestand": 48823,
+    "aus_nachzug": 1177,
+    "laenge_min": 6,
+    "laenge_median": 19.0,
+    "laenge_max": 50
+  }
+}
