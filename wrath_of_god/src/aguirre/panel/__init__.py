@@ -1,8 +1,8 @@
 """panel -- Konsens-Panel fuer die Modellbewertung (Branch A).
 
 Ergaenzt evaluation.py um das, was dort fehlt: Fremdtool-Scorer ueber CLI,
-den Shuffle-Score und die Vote-Aggregation. Spezifikation siehe Projektdoku
-claude/eval_panel_spec.md.
+den Shuffle-Score, das zweite Identitaetsmass und die Vote-Aggregation.
+Spezifikation siehe Projektdoku claude/eval_panel_spec.md.
 
 Abhaengigkeit zeigt NUR in eine Richtung:
 
@@ -17,6 +17,8 @@ Module:
     external      SubprocessScorer + Macrel, AMPlify, AntiBP3, HemoPI
     precomputed   CsvScorer: Scores aus einer CSV statt aus einem CLI (ANIA)
     shuffle       ShuffleScorer: Dekorator ueber einen PPL-Scorer
+    similarity    TrainSimilarityScorer (max_ident_train) neben dem
+                  KnownAMPSimilarityScorer aus evaluation (max_ident_bekannt)
     aggregate     Aggregator, VoteRule, AgreementMatrix
     report        Tabellen T1-T7 und Plots P1-P9
 
@@ -29,6 +31,7 @@ Datenfluss (Branch A, ungefiltert -- hier wird nichts verworfen):
 
 from __future__ import annotations
 
+from aguirre.evaluation import KnownAMPSimilarityScorer
 from aguirre.panel.aggregate import AgreementMatrix, Aggregator, VoteRule
 from aguirre.panel.external import (
     AMPlifyScorer,
@@ -41,6 +44,11 @@ from aguirre.panel.external import (
 from aguirre.panel.precomputed import AniaScorer, CsvScorer
 from aguirre.panel.report import PanelReport, build_report
 from aguirre.panel.shuffle import ShuffleScorer
+from aguirre.panel.similarity import (
+    TrainSimilarityScorer,
+    baue_similarity_scorer,
+    schreibe_split_fasta,
+)
 
 __all__ = [
     "AMPlifyScorer",
@@ -51,10 +59,14 @@ __all__ = [
     "CsvScorer",
     "DummyVoteScorer",
     "HemoPIScorer",
+    "KnownAMPSimilarityScorer",
     "MacrelScorer",
     "PanelReport",
     "ShuffleScorer",
     "SubprocessScorer",
+    "TrainSimilarityScorer",
     "VoteRule",
+    "baue_similarity_scorer",
     "build_report",
+    "schreibe_split_fasta",
 ]
