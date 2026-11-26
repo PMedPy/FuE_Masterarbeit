@@ -31,10 +31,11 @@ from datetime import datetime
 from aguirre.config import (
     CACHE_DIR,
     Config,
-    DATA_DIR,
+    DB_EXTERN_DIR,
     PROJECT_ROOT,
     RESULTS_DIR,
     RUNS_DIR,
+    SPLIT_DIR,
     TRACKED_DIR,
 )
 from aguirre.evaluation import Evaluator, SequenceSet, baue_scorer
@@ -49,7 +50,6 @@ from aguirre.panel import (
     TrainSimilarityScorer,
     VoteRule,
     build_report,
-    schreibe_split_fasta,
 )
 
 
@@ -80,26 +80,48 @@ SMALL_PATH = SAMPLES_DIR / "aguirre-small_50k.faa"
 BIG_PATH = SAMPLES_DIR / "ampdiffusion_650M_50k.faa"      # = Aguirre Big
 TORRES_PATH = TRACKED_DIR / "torres_cellbiomaterial.csv"  # = Torres 50k
 
-SPLIT_CSV = TRACKED_DIR / "split_t075.csv"
-ALLE_FASTA = DATA_DIR / "all19K_unclustered.faa"
-TRAIN_FASTA = TRACKED_DIR / "train_split.fasta"           # Referenz + Zeile
-TEST_FASTA = TRACKED_DIR / "test_split.fasta"             # die Decke
+# Alle Bewertungsmengen kommen aus Skript 14. Dieses Skript baut keine mehr
+# selbst — sonst gäbe es zwei Konventionen im Repo und die Decke wäre je nach
+# Aufrufreihenfolge eine andere Menge.
+TRAIN_FASTA = SPLIT_DIR / "real_amps_train.fasta"         # Referenz + Zeile
+DECKE_CSV = SPLIT_DIR / "real_amps_test.csv"              # die Decke
+TEST_TORRES_FASTA = SPLIT_DIR / "real_amps_test_torres.fasta"
+BEKANNT_FASTA = DB_EXTERN_DIR / "amps_bekannt.fasta"
 
-# TODO(paul): Böden erzeugen (eigenes Skript 14_build_eval_sets.py)
+# TODO(paul): Böden erzeugen (Abschnitt in 14_eval_external_data.py)
 UNIPROT_PATH = SAMPLES_DIR / "uniprot_nonamp.faa"
 RANDOM_PATH = SAMPLES_DIR / "random_len_matched.faa"
 SHUFFLED_PATH = SAMPLES_DIR / "shuffled_own.faa"
 
+# Die zwei Ähnlichkeitsreferenzen. Sie beantworten verschiedene Fragen:
+# max_ident_train fragt "memoriert?", max_ident_bekannt fragt "neu?".
+# Default von amp_referenz_fasta ist torres_train.fasta — damit wäre das
+# zweimal dieselbe Frage. Hier auf die vereinigte Datenbankmenge umstellen.
+cfg.train_referenz_fasta = TRAIN_FASTA
+cfg.amp_referenz_fasta = BEKANNT_FASTA
+
 ANIA_CSV = TRACKED_DIR / "ania_preds.csv"                 # TODO: Batch-Lauf
 
 #===1. Bewertungsmengen===
-# Einmalig, danach idempotent: die Split-FASTAs werden an zwei Stellen
-# gebraucht — der Train-Split als Referenz für max_ident_train, der
-# Test-Split als Decke im Panel (echte AMPs, die das Modell nie gesehen hat).
-for split, ziel in (("train", TRAIN_FASTA), ("test", TEST_FASTA)):
-    if not ziel.is_file():
-        schreibe_split_fasta(split=split, split_csv=SPLIT_CSV,
-                             alle_fasta=ALLE_FASTA, out=ziel)
+fehlend = [q for q in (TRAIN_FASTA, DECKE_CSV, BEKANNT_FASTA) if not q.is_file()]
+if fehlend:
+    raise FileNotFoundError(
+        "Erst scripts/14_eval_external_data.py laufen lassen. Es fehlt: "
+        + ", ".join(str(q) for q in fehlend))
+
+# Die Decke kommt als CSV, nicht als FASTA, wegen der Spalte `kanonisch`.
+# Bewertet wird nur, was aus den 20 proteinogenen Aminosäuren besteht: die
+# generierten Mengen sind zu 100 % kanonisch, die Decke ohne Filter zu rund
+# 80 %. Beides mit denselben Tools zu messen und als Vergleich auszugeben
+# wäre zweierlei Messung — und die Fehlerrichtung die ungünstige, weil
+# unplausible Werte auf der Decke sie nach unten ziehen und unser Modell
+# besser aussehen lassen. Die Datei bleibt vollständig, die Zahl der
+# Übersprungenen steht unten in den Laufmetadaten.
+decke_alle = SequenceSet.from_csv(path=DECKE_CSV, name="Echte AMPs (Test)")
+decke = decke_alle.subset(decke_alle.data["kanonisch"], name="Echte AMPs (Test)")
+n_uebersprungen = len(decke_alle.data) - len(decke.data)
+print(f"[decke] {len(decke.data)} von {len(decke_alle.data)} bewertet, "
+      f"{n_uebersprungen} nicht-kanonisch übersprungen")
 
 # Torres' CSV bringt 20 eigene Spalten mit (ihre APEX-MICs, ihre ppl). Die
 # gehören nicht in unsere Score-Tabelle — sonst stehen zwei verschiedene
@@ -112,8 +134,13 @@ sets = {
     "aguirre_small": SequenceSet.from_fasta(path=SMALL_PATH, name="Aguirre Small"),
     "aguirre_big": SequenceSet.from_fasta(path=BIG_PATH, name="Aguirre Big"),
     "torres": torres,
-    "real_amps_test": SequenceSet.from_fasta(path=TEST_FASTA, name="Echte AMPs (Test)"),
+    "real_amps_test": decke,
     "real_amps_train": SequenceSet.from_fasta(path=TRAIN_FASTA, name="Echte AMPs (Train)"),
+    # Der reine Torres-Testsplit (1 938), gleiche Verteilung wie train. Nur
+    # nötig, wenn du zeigen willst, dass die erweiterte Decke sich anders
+    # verhält als Torres' eigene Testmenge. Kostet kaum etwas.
+    # "real_amps_test_torres": SequenceSet.from_fasta(
+    #     path=TEST_TORRES_FASTA, name="Echte AMPs (Test, nur Torres)"),
     # TODO(paul): einkommentieren, sobald die Böden stehen.
     # "uniprot": SequenceSet.from_fasta(path=UNIPROT_PATH, name="UniProt Nicht-AMPs"),
     # "random_len": SequenceSet.from_fasta(path=RANDOM_PATH, name="Zufall (längenangepasst)"),
@@ -121,9 +148,11 @@ sets = {
 }
 
 #===2. Evaluation: bestehende + Panel-Scorer===
-# ident_bekannt bleibt aus baue_scorer, zeigt aber jetzt auf die BREITE
-# AMP-DB — cfg.amp_referenz_fasta umstellen, bisher war das torres_train.fasta
-# und damit faktisch ein zweiter Memorisierungstest.
+# ident_bekannt bleibt aus baue_scorer und zeigt jetzt auf amps_bekannt.fasta
+# (in Abschnitt 0 gesetzt): DBAASP, DRAMP general, DRAMP patent und APD,
+# 41 791 Sequenzen. Ohne den Patentsatz wären es 26 853 und die Neuheit
+# systematisch überschätzt — die Patente decken 90 % Sequenzen ab, die in
+# keiner der anderen drei Quellen stehen.
 basis = ["aa_entropy", "progen2", "esm2_pppl", "apex", "ident_bekannt"]
 scorers = baue_scorer(basis, cfg)
 
@@ -175,9 +204,11 @@ report.save(out_dir=RUN_PATH, stem=laufname)
     "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     "eingaben": {k: str(v) for k, v in {
         "aguirre_small": SMALL_PATH, "aguirre_big": BIG_PATH,
-        "torres": TORRES_PATH, "train_split": TRAIN_FASTA,
-        "test_split": TEST_FASTA, "ania_csv": ANIA_CSV,
+        "torres": TORRES_PATH, "real_amps_train": TRAIN_FASTA,
+        "real_amps_test": DECKE_CSV, "ania_csv": ANIA_CSV,
     }.items()},
+    "decke": {"gesamt": len(decke_alle.data), "bewertet": len(decke.data),
+              "nicht_kanonisch": n_uebersprungen},
     "esm_scorer": cfg.esm_scorer_model_name,
     "referenzen": {
         "max_ident_train": str(cfg.train_referenz_fasta),

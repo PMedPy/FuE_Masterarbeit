@@ -57,9 +57,8 @@ class TrainSimilarityScorer(KnownAMPSimilarityScorer):
     def from_config(cls, cfg_in: Config) -> "TrainSimilarityScorer":
         """Braucht cfg.train_referenz_fasta.
 
-        TODO(paul): Config-Eintrag anlegen, z.B.
-            train_referenz_fasta: Path = TRACKED_DIR / "train_split.fasta"
-        und mit schreibe_split_fasta("train", ...) einmalig erzeugen.
+        Default ist SPLIT_DIR / "real_amps_train.fasta", erzeugt von
+        Skript 14 ueber schreibe_split_fasta("train", ...).
         """
         return cls(
             referenz=cfg_in.train_referenz_fasta,
@@ -105,5 +104,50 @@ def schreibe_split_fasta(
 
     Returns:
         out, damit der Aufruf direkt in einen Scorer-Konstruktor passt.
+
+    Raises:
+        ValueError: wenn der Split leer ist oder ids fehlen. Lieber hart
+            abbrechen als eine zu kleine Referenz still durchreichen -- eine
+            fehlende Trainingssequenz macht ein generiertes Peptid faelschlich
+            "neu".
     """
-    raise NotImplementedError
+    split_csv, alle_fasta, out = Path(split_csv), Path(alle_fasta), Path(out)
+    tabelle = pd.read_csv(split_csv)
+    gesucht = set(tabelle.loc[tabelle["split"] == split, "id"])
+    if not gesucht:
+        raise ValueError(
+            f"Split {split!r} ist leer. Vorhanden: "
+            f"{sorted(tabelle['split'].unique())}"
+        )
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    gefunden: set[str] = set()
+    with alle_fasta.open(encoding="utf-8") as quelle, \
+            out.open("w", encoding="utf-8") as ziel:
+        kennung: str | None = None
+        teile: list[str] = []
+
+        def schreibe() -> None:
+            if kennung in gesucht and teile:
+                ziel.write(f">{kennung}\n{''.join(teile)}\n")
+                gefunden.add(kennung)
+
+        for zeile in quelle:
+            zeile = zeile.strip()
+            if not zeile:
+                continue
+            if zeile.startswith(">"):
+                schreibe()
+                kennung, teile = zeile[1:].strip(), []
+            else:
+                teile.append(zeile)
+        schreibe()
+
+    fehlend = gesucht - gefunden
+    if fehlend:
+        raise ValueError(
+            f"{len(fehlend)} ids aus Split {split!r} fehlen in {alle_fasta.name}, "
+            f"z.B. {sorted(fehlend)[:5]}"
+        )
+    print(f"[split] {split}: {len(gefunden)} Sequenzen -> {out}")
+    return out

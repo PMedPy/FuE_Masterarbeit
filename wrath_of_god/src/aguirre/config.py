@@ -35,7 +35,10 @@ RUNS_DIR = PROJECT_ROOT / "wrath_of_god" / "runs"
 TMP_DIR = PROJECT_ROOT / "wrath_of_god" / "tmp"
 SPLIT_DIR = PROJECT_ROOT / "wrath_of_god" / "splits"
 TRACKED_DIR = PROJECT_ROOT / "wrath_of_god" / "data_tracked"
+DB_CACHE_DIR = DATA_DIR / "cache" / "DBs"
+DB_EXTERN_DIR = TRACKED_DIR / "extern"
 RESULTS_DIR = PROJECT_ROOT / "wrath_of_god" / "results"
+EVAL_SET_DIR = TRACKED_DIR / "eval_sets"
 
 def _yaml_safe(obj):
     """Rekursiv yaml-taugliche Typen erzwingen: Path -> str, Tupel -> Liste.
@@ -110,7 +113,15 @@ class Config:
     esm_scorer_model_name: str = "esm2_t6_8M_UR50D" # "esm2_t6_8M_UR50D" oder "esm2_t33_650M_UR50D"
     esm_scorer_embed_dim: int = 320 # 320 (8M) oder 1280 (650M)
 
+    # Referenz fuer max_ident_bekannt ("aehnelt irgendeinem bekannten AMP").
+    # Default bleibt torres_train.fasta, damit aeltere Skripte unveraendert
+    # laufen; Skript 13 stellt auf extern/amps_bekannt.fasta um (alle vier
+    # Datenbankquellen). Mit torres_train als Referenz misst man faktisch ein
+    # zweites Mal Memorisierung, nicht Neuheit.
     amp_referenz_fasta: Path = TRACKED_DIR / "torres_train.fasta"
+    # Referenz fuer max_ident_train ("aehnelt unseren eigenen Trainingsdaten").
+    # Erzeugt von Skript 14 ueber schreibe_split_fasta("train", ...).
+    train_referenz_fasta: Path = SPLIT_DIR / "real_amps_train.fasta"
     similarity_max_ident: float = 0.60   # Torres' Kriterium (2)
     similarity_cov_mode: int = 2
     similarity_coverage: float = 0.8
